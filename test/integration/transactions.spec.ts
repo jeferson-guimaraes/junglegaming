@@ -300,12 +300,12 @@ describe('POST /wagering/transactions: idempotência', () => {
     expect((await saldo(wallet.id)).balance).toBe('510.00');
   });
 
-  it('replay reconhece o mesmo payload com chaves em outra ordem e valor em outra forma', async () => {
+  it('replay reconhece o mesmo payload com chaves em outra ordem e ids em maiúsculas', async () => {
     const wallet = await t.criarWallet('100.00');
     const pedido = transacao(wallet);
     await enviar(pedido);
     const reordenado = {
-      money: { currency: 'BRL', amount: '25' },
+      money: { currency: 'BRL', amount: '25.00' },
       kind: pedido.kind,
       gameId: pedido.gameId,
       roundId: pedido.roundId,
@@ -446,6 +446,8 @@ describe('POST /wagering/transactions: payload inválido', () => {
     ['playerId que não é UUID', { playerId: 'player-1' }],
     ['walletId que não é UUID', { walletId: 'wallet-1' }],
     ['valor com 3 casas', { money: { amount: '1.001', currency: 'BRL' } }],
+    ['valor sem casas decimais', { money: { amount: '25', currency: 'BRL' } }],
+    ['valor com 1 casa', { money: { amount: '25.5', currency: 'BRL' } }],
     ['valor numérico', { money: { amount: 25, currency: 'BRL' } }],
     ['valor negativo', { money: { amount: '-1.00', currency: 'BRL' } }],
     ['BET com valor zero', { money: { amount: '0.00', currency: 'BRL' } }],

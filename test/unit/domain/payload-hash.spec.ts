@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'bun:test';
+import { InvalidMoneyError } from '@/domain/errors';
 import { Money } from '@/domain/money';
 import { canonicalJson, computePayloadHash, type PayloadHashFields } from '@/domain/payload-hash';
 import { WagerTransaction, WagerTransactionKind } from '@/domain/wager-transaction';
@@ -83,12 +84,10 @@ describe('computePayloadHash', () => {
     expect(computePayloadHash({ ...base, ...diferenca })).not.toBe(computePayloadHash(base));
   });
 
-  it('formas diferentes do mesmo valor geram o mesmo hash (valor normalizado em 2 casas)', () => {
-    const comDuasCasas = computePayloadHash(base);
-
-    for (const amount of ['25', '25.0', '25.00']) {
-      expect(computePayloadHash({ ...base, money: { amount, currency: 'BRL' } })).toBe(
-        comDuasCasas,
+  it('valor fora da escala de 2 casas não tem hash: é payload inválido', () => {
+    for (const amount of ['25', '25.0', '25.000']) {
+      expect(() => computePayloadHash({ ...base, money: { amount, currency: 'BRL' } })).toThrow(
+        InvalidMoneyError,
       );
     }
   });
@@ -119,8 +118,8 @@ describe('Idempotency key com payload divergente', () => {
     createdAt: new Date('2026-11-12T12:00:00.000Z'),
   });
 
-  it('o mesmo payload, em qualquer forma equivalente, confere com a transação gravada: é replay', () => {
-    const reenviado = { ...base, money: { currency: 'BRL', amount: '25' } };
+  it('o mesmo payload, com as chaves em outra ordem, confere com a transação gravada: é replay', () => {
+    const reenviado = { ...base, money: { currency: 'BRL', amount: '25.00' } };
 
     expect(gravada.matchesPayload(computePayloadHash(reenviado))).toBe(true);
   });

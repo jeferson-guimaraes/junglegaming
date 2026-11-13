@@ -16,11 +16,11 @@ type Decimal = InstanceType<typeof Decimal>;
 
 const ESCALA = 2;
 /**
- * Até 17 dígitos inteiros, sem zeros à esquerda, e no máximo 2 casas: cabe em NUMERIC(19,2).
- * "10" e "10.5" são aceitos e normalizados para "10.00" e "10.50"; mais de 2 casas é rejeitado,
- * porque aceitar exigiria arredondar dinheiro.
+ * Escala fixa: até 17 dígitos inteiros, sem zeros à esquerda, e exatamente 2 casas, o que cabe
+ * em NUMERIC(19,2). "10" e "10.5" são rejeitados, assim como mais de 2 casas: o valor entra e
+ * sai sempre na mesma forma, sem normalização nem arredondamento.
  */
-const FORMATO_AMOUNT = /^(0|[1-9]\d{0,16})(\.\d{1,2})?$/;
+const FORMATO_AMOUNT = /^(0|[1-9]\d{0,16})\.\d{2}$/;
 const FORMATO_CURRENCY = /^[A-Z]{3}$/;
 const TETO = new Decimal('99999999999999999.99');
 
@@ -37,7 +37,7 @@ export class Money {
 
   /**
    * Cria a partir de um contrato de entrada ou da persistência.
-   * Só aceita string decimal não negativa com no máximo 2 casas; a saída tem sempre 2.
+   * Só aceita string decimal não negativa com exatamente 2 casas.
    */
   static from(props: MoneyProps): Money {
     if (props === null || typeof props !== 'object') {
@@ -46,7 +46,7 @@ export class Money {
     const { amount, currency } = props;
     if (typeof amount !== 'string' || !FORMATO_AMOUNT.test(amount)) {
       throw new InvalidMoneyError(
-        'amount deve ser uma string decimal não negativa com no máximo 2 casas, ex.: "25.00"',
+        'amount deve ser uma string decimal não negativa com exatamente 2 casas, ex.: "25.00"',
       );
     }
     Money.assertCurrency(currency);
