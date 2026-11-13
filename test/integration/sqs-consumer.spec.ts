@@ -356,6 +356,107 @@ describe('Consumer SQS: falhas transitórias', () => {
   });
 });
 
+describe('Consumer SQS: métricas e logs', () => {
+  it('as métricas registram mensagens repetidas, novas tentativas e envios à DLQ dos testes acima', async () => {
+    const texto = await (await fetch(`${t.baseUrl}/metrics`)).text();
+    const valor = (serie: string) => {
+      const linha = texto.split('\n').find((l) => l.startsWith(`${serie} `));
+      return linha === undefined ? 0 : Number(linha.slice(serie.length + 1));
+    };
+
+    expect(valor('wager_duplicates_total{type="inbox_duplicate"}')).toBeGreaterThanOrEqual(2);
+    expect(valor('wager_duplicates_total{type="idempotency_conflict"}')).toBeGreaterThanOrEqual(1);
+    expect(valor('wager_retries_total{component="consumer"}')).toBeGreaterThanOrEqual(3);
+    expect(valor('wager_dlq_messages_total{reason="INVALID_PAYLOAD"}')).toBeGreaterThanOrEqual(6);
+    expect(valor('wager_dlq_messages_total{reason="WALLET_NOT_FOUND"}')).toBeGreaterThanOrEqual(1);
+    expect(
+      valor('wager_dlq_messages_total{reason="INBOX_PAYLOAD_MISMATCH"}'),
+    ).toBeGreaterThanOrEqual(2);
+    expect(
+      valor('wager_transactions_total{kind="BET",source="sqs",status="PROCESSED"}'),
+    ).toBeGreaterThan(5);
+    expect(valor('wager_dlq_depth')).toBeGreaterThanOrEqual(0);
+  });
+
+  it('os logs do consumer trazem messageId, transactionId, walletId, providerId e a mesma correlação dos eventos, sem valores', async () => {
+    const wallet = await t.criarWallet('5000.00');
+    const filas = {
+      SQS_TRANSACTIONS_QUEUE: `tx-log-${sufixo}.fifo`,
+      SQS_TRANSACTIONS_DLQ: `tx-log-dlq-${sufixo}.fifo`,
+    };
+    const pedido = transacao(wallet, { money: brl('4321.09'), roundId: 'rodada-secreta' });
+    const msg = mensagem(pedido);
+    try {
+      const app = await startApp({
+        ...filas,
+        DATABASE_URL: t.db.url,
+        CONSUMER_ENABLED: 'true',
+        CONSUMER_WAIT_TIME_SECONDS: '1',
+      });
+      const url = await esperarFila(sqs, filas.SQS_TRANSACTIONS_QUEUE);
+      await enviarCru(sqs, url, JSON.stringify(msg), wallet.id);
+      const tx = await esperarTransacao(pedido);
+      // Uma mensagem com erro permanente, para cobrir também o log de DLQ.
+      await enviarCru(
+        sqs,
+        url,
+        JSON.stringify(
+          mensagem(
+            transacao({ id: randomUUID(), playerId: wallet.playerId }, { money: brl('8765.43') }),
+          ),
+        ),
+        wallet.id,
+      );
+      await drenar(sqs, await esperarFila(sqs, filas.SQS_TRANSACTIONS_DLQ), {
+        esperadas: 1,
+        prazoMs: 10_000,
+      });
+
+      const { logs } = await app.stop('SIGTERM');
+
+      const processada = logs.find((l) => l.msg === 'consumer: mensagem processada') as Linha;
+      const correlacaoDoLog = processada.correlationId;
+      expect(typeof correlacaoDoLog).toBe('string');
+      expect(processada).toMatchObject({
+        messageId: msg.messageId,
+        transactionId: tx.id,
+        walletId: wallet.id,
+        providerId: 'provider-a',
+        status: 'PROCESSED',
+      });
+      const [evento] = await t.sql<{ payload: Linha }>(
+        "select payload from outbox_messages where payload->'data'->>'transactionId' = ?",
+        [tx.id],
+      );
+      expect(evento?.payload.correlationId).toBe(correlacaoDoLog as string);
+      const naDlqLog = logs.find(
+        (l) => l.msg === 'consumer: erro permanente; mensagem enviada à DLQ',
+      ) as Linha;
+      expect(naDlqLog).toMatchObject({
+        motivo: 'WALLET_NOT_FOUND',
+        messageId: expect.any(String),
+        providerId: 'provider-a',
+        walletId: expect.any(String),
+      });
+      const tudo = logs.map((l) => JSON.stringify(l)).join('\n');
+      for (const sensivel of [
+        '4321.09',
+        '8765.43',
+        '5000.00',
+        'rodada-secreta',
+        'amount',
+        'money',
+      ]) {
+        expect(tudo).not.toContain(sensivel);
+      }
+    } finally {
+      await stopAllApps();
+      await apagarFila(sqs, filas.SQS_TRANSACTIONS_QUEUE);
+      await apagarFila(sqs, filas.SQS_TRANSACTIONS_DLQ);
+    }
+  }, 60_000);
+});
+
 describe('Consumer SQS: vários consumers e processos reais', () => {
   it('dois consumers na mesma fila, com mensagens repetidas: cada transação é aplicada uma vez', async () => {
     const segundo = await t.variante((b) => b);

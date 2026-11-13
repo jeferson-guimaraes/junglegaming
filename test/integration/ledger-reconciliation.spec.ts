@@ -6,7 +6,7 @@ import { chave, type Linha, startTestApp, type TestApp, transacao } from '../sup
 let t: TestApp;
 
 beforeAll(async () => {
-  t = await startTestApp();
+  t = await startTestApp({ DB_LOCK_TIMEOUT_MS: '300' });
 });
 
 afterAll(async () => {
@@ -147,6 +147,10 @@ describe('GET /wallets/:walletId/ledger', () => {
     ['limit acima do teto', '?limit=201'],
     ['limit não numérico', '?limit=abc'],
     ['cursor que não é base64 de um cursor', '?cursor=isto-nao-e-cursor'],
+    [
+      'cursor além do maior valor possível',
+      `?cursor=${Buffer.from('{"s":"9223372036854775808"}').toString('base64url')}`,
+    ],
     ['cursor adulterado', `?cursor=${Buffer.from('{"s":"1; drop table"}').toString('base64url')}`],
   ])('%s: 400', async (_caso, query) => {
     const wallet = await t.criarWallet('10.00');
@@ -217,6 +221,30 @@ describe('POST /wallets/:walletId/reconciliation', () => {
       expect(linha?.balance).toBe(adulterado);
     },
   );
+
+  it('lê saldo e ledger com a wallet travada: enquanto outra transação a segura, a reconciliação espera', async () => {
+    const wallet = await t.criarWallet('100.00');
+    const dono = t.db.orm.em.fork();
+    await dono.begin();
+    try {
+      await dono
+        .getConnection()
+        .execute(
+          'select id from wallets where id = ? for update',
+          [wallet.id],
+          'all',
+          dono.getTransactionContext(),
+        );
+
+      const { status, body } = await reconciliar(wallet.id);
+
+      expect(status).toBe(503);
+      expect(body).toMatchObject({ code: 'TRANSIENT_FAILURE' });
+    } finally {
+      await dono.rollback();
+    }
+    expect((await reconciliar(wallet.id)).body).toMatchObject({ consistent: true });
+  });
 
   it('wallet inexistente: 404; id malformado: 400', async () => {
     expect((await reconciliar(randomUUID())).status).toBe(404);

@@ -68,8 +68,8 @@ export class DuplicateTransactionError extends ApplicationError {
 
 /** A wallet mudou entre a leitura e a gravação. Não deve ocorrer sob o lock; tratado como transitório. */
 export class ConcurrentUpdateError extends TransientInfrastructureError {
-  constructor(walletId: string) {
-    super(`versão da wallet ${walletId} mudou`);
+  constructor(readonly walletId: string) {
+    super('concurrent_update'); // motivo fixo: vira label de métrica
   }
 }
 

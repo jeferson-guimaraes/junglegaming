@@ -7,7 +7,8 @@ type Tipo = 'counter' | 'histogram' | 'gauge';
 export const METRICAS: Record<string, { tipo: Tipo; ajuda: string }> = {
   wager_transactions_total: {
     tipo: 'counter',
-    ajuda: 'Transações gravadas, por tipo, status final e canal de entrada (não conta replays).',
+    ajuda:
+      'Transações por tipo, status e origem. Conta o status na entrada (http, sqs, internal) e, para as pendentes, de novo quando chegam ao estado final (worker). Não conta replays.',
   },
   wager_duplicates_total: {
     tipo: 'counter',
@@ -25,7 +26,8 @@ export const METRICAS: Record<string, { tipo: Tipo; ajuda: string }> = {
   },
   wager_lock_conflicts_total: {
     tipo: 'counter',
-    ajuda: 'Operações interrompidas por falha transitória (lock não obtido no prazo, conexão).',
+    ajuda:
+      'Transações interrompidas por falha transitória: lock não obtido no prazo (55P03), atualização concorrente ou conexão.',
   },
   wallet_reconciliation_divergences_total: {
     tipo: 'counter',
@@ -42,6 +44,9 @@ export const METRICAS: Record<string, { tipo: Tipo; ajuda: string }> = {
   },
   wager_dlq_depth: { tipo: 'gauge', ajuda: 'Mensagens paradas na DLQ da fila de transações.' },
 };
+
+/** Contadores que não têm labels e, por isso, podem ser expostos com zero. */
+const SEM_LABEL = new Set(['wallet_reconciliation_divergences_total']);
 
 const LIMITES = [0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5];
 
@@ -100,9 +105,17 @@ export class PrometheusMetrics extends Metrics {
       if (!definicao) return;
       saida.push(`# HELP ${nome} ${definicao.ajuda}`, `# TYPE ${nome} ${definicao.tipo}`);
     };
-    for (const [nome, series] of this.contadores) {
+    // Todo contador do catálogo aparece desde o início: sem série ainda, só o cabeçalho; os
+    // sem label saem com zero, para que alertas de ausência e rate() tenham de onde partir.
+    for (const [nome, definicao] of Object.entries(METRICAS)) {
+      if (definicao.tipo !== 'counter') continue;
       cabecalho(nome);
-      for (const [labels, valor] of series) saida.push(linha(nome, labels, valor));
+      const series = this.contadores.get(nome);
+      if (series) {
+        for (const [labels, valor] of series) saida.push(linha(nome, labels, valor));
+      } else if (SEM_LABEL.has(nome)) {
+        saida.push(linha(nome, '', 0));
+      }
     }
     for (const [nome, series] of this.histogramas) {
       cabecalho(nome);

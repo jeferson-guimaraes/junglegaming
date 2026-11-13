@@ -62,6 +62,14 @@ describe('PrometheusMetrics', () => {
     expect(texto).toContain('wager_outbox_lag_seconds 1.5');
   });
 
+  it('um processo recém-iniciado já expõe o catálogo de contadores, com zero no que não tem label', () => {
+    const texto = new PrometheusMetrics().render();
+
+    expect(texto).toContain('# TYPE wager_transactions_total counter');
+    expect(texto).toContain('# TYPE wager_dlq_messages_total counter');
+    expect(texto).toContain('wallet_reconciliation_divergences_total 0');
+  });
+
   it('nome desconhecido ou de outro tipo é erro de programação', () => {
     const metrics = new PrometheusMetrics();
 

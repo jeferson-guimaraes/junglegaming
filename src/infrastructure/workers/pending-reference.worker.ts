@@ -40,7 +40,10 @@ export class PendingReferenceWorker implements OnApplicationBootstrap, OnModuleD
 
   private async ciclo(): Promise<void> {
     const resumo = await this.reprocess.runOnce(() => this.parando);
-    const { problemas, ...contagem } = resumo;
+    const { problemas, desfechos, ...contagem } = resumo;
+    for (const { kind, status } of desfechos) {
+      this.metrics.increment('wager_transactions_total', { kind, status, source: 'worker' });
+    }
     const repetidas = resumo.aguardando + resumo.adiadas;
     if (repetidas > 0) {
       this.metrics.increment('wager_retries_total', { component: 'pending_reference' }, repetidas);

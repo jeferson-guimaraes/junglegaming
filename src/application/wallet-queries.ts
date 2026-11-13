@@ -21,7 +21,7 @@ function encodeCursor(seq: string): string {
 function decodeCursor(cursor: string): string {
   try {
     const { s } = JSON.parse(Buffer.from(cursor, 'base64url').toString('utf8')) as { s?: unknown };
-    if (typeof s === 'string' && /^[1-9]\d{0,18}$/.test(s)) return s;
+    if (typeof s === 'string' && /^[1-9]\d{0,17}$/.test(s)) return s;
   } catch {
     // cai no erro abaixo
   }

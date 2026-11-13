@@ -469,7 +469,11 @@ describe('Worker de referências pendentes', () => {
     clock.avancar(5);
     let consultas = 0;
 
-    const { problemas: _problemas, ...contagem } = await worker.runOnce(() => ++consultas > 1);
+    const {
+      problemas: _problemas,
+      desfechos: _desfechos,
+      ...contagem
+    } = await worker.runOnce(() => ++consultas > 1);
 
     // Havia pelo menos 3 pendentes vencidas; só a primeira foi tratada antes da parada.
     expect(Object.values(contagem).reduce((soma, n) => soma + n, 0)).toBe(1);

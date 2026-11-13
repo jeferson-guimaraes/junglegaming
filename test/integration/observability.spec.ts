@@ -148,7 +148,8 @@ describe('Logs', () => {
         body: JSON.stringify(pedido),
       });
     }
-    // Um erro não tratado também não pode vazar dados: corpo inválido para o banco.
+    // Divergência provocada: a reconciliação loga o problema, e esse log também não leva valores.
+    await t.sql("update wallets set balance = '1111.11' where id = ?", [wallet.id]);
     await fetch(`${app.baseUrl}/wallets/${wallet.id}/reconciliation`, { method: 'POST' });
 
     const { logs } = await app.stop('SIGTERM');
@@ -172,12 +173,21 @@ describe('Logs', () => {
       failureCode: 'INSUFFICIENT_FUNDS',
     });
 
+    expect(
+      logs.find((l) => l.msg === 'reconciliação: saldo da wallet diverge do ledger'),
+    ).toMatchObject({
+      level: 'error',
+      walletId: wallet.id,
+      checkedEntries: 2,
+    });
+
     const tudo = logs.map((l) => JSON.stringify(l)).join('\n');
     for (const sensivel of [
       '7777.77',
       '1234.56',
       '99999.99',
       '6543.21',
+      '1111.11',
       'rodada-secreta',
       'amount',
       'money',
