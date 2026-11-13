@@ -8,7 +8,9 @@ import {
 import type { Response } from 'express';
 import {
   ApplicationError,
+  IdempotencyConflictError,
   InvalidPayloadError,
+  TransactionNotFoundError,
   TransientInfrastructureError,
   WalletAlreadyExistsError,
   WalletNotFoundError,
@@ -28,6 +30,8 @@ interface ErroHttp {
 function traduzir(erro: unknown): ErroHttp | undefined {
   if (erro instanceof InvalidPayloadError) return { status: 400, ...corpo(erro) };
   if (erro instanceof WalletNotFoundError) return { status: 404, ...corpo(erro) };
+  if (erro instanceof TransactionNotFoundError) return { status: 404, ...corpo(erro) };
+  if (erro instanceof IdempotencyConflictError) return { status: 409, ...corpo(erro) };
   if (erro instanceof WalletAlreadyExistsError) return { status: 409, ...corpo(erro) };
   if (erro instanceof TransientInfrastructureError) return { status: 503, ...corpo(erro) };
   if (erro instanceof HttpException) {

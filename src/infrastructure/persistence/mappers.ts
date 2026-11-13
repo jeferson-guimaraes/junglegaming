@@ -1,5 +1,10 @@
+import type { FailureCode } from '@/domain/failure-code';
 import type { OutboxMessage } from '@/domain/outbox-message';
-import type { WagerTransaction } from '@/domain/wager-transaction';
+import {
+  WagerTransaction,
+  type WagerTransactionKind,
+  type WagerTransactionStatus,
+} from '@/domain/wager-transaction';
 import { Wallet } from '@/domain/wallet';
 import type { WalletLedgerEntry } from '@/domain/wallet-ledger-entry';
 import type {
@@ -88,4 +93,34 @@ export function outboxToRecord(message: OutboxMessage): OutboxRecord {
     nextAttemptAt: message.nextAttemptAt ?? null,
     publishedAt: message.publishedAt ?? null,
   };
+}
+
+/** O banco devolve null nas colunas vazias; o domínio usa undefined. */
+export function transactionFromRecord(record: WagerTransactionRecord): WagerTransaction {
+  return WagerTransaction.rehydrate({
+    id: record.id,
+    providerId: record.providerId,
+    externalTransactionId: record.externalTransactionId,
+    idempotencyKey: record.idempotencyKey,
+    payloadHash: record.payloadHash,
+    walletId: record.walletId,
+    playerId: record.playerId,
+    roundId: record.roundId ?? undefined,
+    gameId: record.gameId ?? undefined,
+    kind: record.kind as WagerTransactionKind,
+    amount: record.amount,
+    currency: record.currency,
+    referenceExternalTransactionId: record.referenceExternalTransactionId ?? undefined,
+    createdAt: record.createdAt,
+    status: record.status as WagerTransactionStatus,
+    referenceTransactionId: record.referenceTransactionId ?? undefined,
+    failureCode: (record.failureCode as FailureCode | null) ?? undefined,
+    observedBalance:
+      record.observedBalance === null || record.observedBalanceCurrency === null
+        ? undefined
+        : { amount: record.observedBalance, currency: record.observedBalanceCurrency },
+    processedAt: record.processedAt ?? undefined,
+    referenceAttempts: record.referenceAttempts,
+    nextReferenceAttemptAt: record.nextReferenceAttemptAt ?? undefined,
+  });
 }
