@@ -1,6 +1,8 @@
 import { MikroORM } from '@mikro-orm/postgresql';
 import { Injectable, Module, type OnApplicationShutdown } from '@nestjs/common';
+import { UnitOfWork } from '@/application/ports';
 import { loadEnv } from '../config/env';
+import { MikroOrmUnitOfWork } from './mikro-orm-unit-of-work';
 import { createOrmConfig } from './orm.config';
 
 /** Fecha o pool no encerramento, depois que requisições e workers já pararam. */
@@ -29,7 +31,8 @@ class DatabaseShutdown implements OnApplicationShutdown {
       },
     },
     DatabaseShutdown,
+    { provide: UnitOfWork, useClass: MikroOrmUnitOfWork },
   ],
-  exports: [MikroORM],
+  exports: [MikroORM, UnitOfWork],
 })
 export class DatabaseModule {}
