@@ -153,6 +153,8 @@ Uma transação cuja referência ainda não chegou é gravada como `PENDING_REFE
 - **Referência existente, mas ainda não finalizada** (por exemplo, `ROLLBACK` de um `REFUND` que espera a `BET`): a transação aguarda **sem gastar tentativas**, para que a cadeia inteira termine processada quando a primeira peça chegar. Essa espera tem prazo total de **15 minutos** desde a criação; sem ele, duas transações que se referenciam em ciclo ficariam pendentes para sempre.
 - **Referência finalizada:** aplica ou rejeita na hora, com o código correspondente.
 
+**Consequência para prêmios.** `WIN` e `LOSS` seguem a mesma regra quando trazem referência: um `WIN` cuja `BET` não chega em cerca de 5 minutos é rejeitado com `REFERENCE_NOT_FOUND`, e o crédito não é aplicado. Creditar um prêmio cuja aposta nunca foi debitada seria pagar sem ter cobrado, então a rejeição é a escolha conservadora. Nada se perde em silêncio: a transação fica gravada, o evento `WagerTransactionRejected` é publicado e o provedor recebe 422 com o código ao reenviar ou consultar. Como a idempotency key fica associada à rejeição, a recuperação é do provedor: depois de entregar a `BET`, ele reenvia o prêmio com um novo `externalTransactionId`. Um `WIN` enviado sem referência não passa por essa espera e é creditado na hora.
+
 O worker lê as candidatas vencidas sem lock, trava wallet e transação e **revalida** o estado: se outra instância já tratou a pendente, ele ignora. Erro transitório (lock, conexão) não gasta tentativa e nunca encerra a transação. Um erro desconhecido é repetido até o mesmo prazo de 15 minutos; se persistir, a transação termina `FAILED`, para não ficar pendente para sempre nem atrasar as demais.
 
 ## 10. Entradas: HTTP e SQS
