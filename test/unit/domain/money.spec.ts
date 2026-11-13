@@ -13,17 +13,12 @@ describe('Money', () => {
     });
 
     it.each([
-      ['sem casas decimais', '10', '10.00'],
-      ['com 1 casa', '10.5', '10.50'],
-      ['zero sem casas', '0', '0.00'],
-      ['com 2 casas', '10.50', '10.50'],
-    ])('normaliza para 2 casas: %s', (_caso, entrada, esperado) => {
-      expect(brl(entrada).toJSON().amount).toBe(esperado);
-    });
-
-    it('formas diferentes do mesmo valor são iguais', () => {
-      expect(brl('25').equals(brl('25.00'))).toBe(true);
-      expect(brl('25.5').equals(brl('25.50'))).toBe(true);
+      ['sem casas decimais', '10'],
+      ['com 1 casa', '10.5'],
+      ['zero sem casas', '0'],
+      ['zero com 1 casa', '0.0'],
+    ])('rejeita valor fora da escala fixa de 2 casas: %s', (_caso, entrada) => {
+      expect(() => brl(entrada)).toThrow(InvalidMoneyError);
     });
 
     it('aceita o maior valor que cabe em NUMERIC(19,2)', () => {

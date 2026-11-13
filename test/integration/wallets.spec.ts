@@ -145,16 +145,6 @@ describe('POST /wallets', () => {
     });
   });
 
-  it('normaliza o valor em 2 casas', async () => {
-    const response = await postWallet(pedido('1000'));
-
-    expect(response.status).toBe(201);
-    expect(((await response.json()) as { balance: Linha }).balance).toEqual({
-      amount: '1000.00',
-      currency: 'BRL',
-    });
-  });
-
   it('saldo inicial zero cria a wallet sem OPENING, sem lançamento e sem evento', async () => {
     const response = await postWallet(pedido('0.00'));
     const wallet = (await response.json()) as { id: string; version: number; balance: Linha };
@@ -225,6 +215,8 @@ describe('POST /wallets', () => {
     ['playerId que não é string', { ...pedido('1.00'), playerId: 123 }],
     ['initialBalance ausente', { playerId: randomUUID() }],
     ['valor com mais de 2 casas', pedido('1.001')],
+    ['valor sem casas decimais', pedido('1000')],
+    ['valor com 1 casa', pedido('10.5')],
     ['valor negativo', pedido('-1.00')],
     [
       'valor numérico em vez de string',

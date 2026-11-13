@@ -39,7 +39,7 @@ Um teste (`test/unit/domain/domain-purity.spec.ts`) falha se o domínio importar
 - **No domínio:** a classe `Money` guarda o valor em `decimal.js`, com precisão sobrando para o teto de `NUMERIC(19,2)`. Não há `number` em nenhum ponto do caminho.
 - **Nos contratos (HTTP, fila, eventos):** `{ "amount": "25.00", "currency": "BRL" }`, sempre string decimal.
 - **No banco:** `NUMERIC(19,2)`, lido e gravado como string. As somas da reconciliação são feitas pelo próprio PostgreSQL, em `NUMERIC`.
-- **Entrada:** aceita até 2 casas e normaliza para 2 (`"10"` vira `"10.00"`). Mais de 2 casas é rejeitado, porque aceitar exigiria arredondar dinheiro. Também são rejeitados valor negativo, notação científica, zeros à esquerda, separador de milhar e valor acima do teto.
+- **Entrada:** escala fixa de 2 casas, na entrada e na saída. `"10"`, `"10.5"` e `"10.001"` são rejeitados: o valor nunca é normalizado nem arredondado. Também são rejeitados valor negativo, notação científica, zeros à esquerda, separador de milhar e valor acima do teto.
 - **Moeda:** código ISO-4217 de 3 letras maiúsculas. Operar valores de moedas diferentes é erro.
 
 ## 3. ORM e persistência
@@ -93,7 +93,7 @@ Requisições à espera do lock de uma wallet ocupam conexões do pool. Com muit
 ## 6. Idempotência
 
 - A fonte da verdade é a **idempotency key**, persistida com chave única. Não há cache em memória.
-- `payloadHash` = SHA-256 (hexadecimal) do **JSON canônico** (chaves ordenadas em todos os níveis, sem espaços) destes campos: `providerId`, `externalTransactionId`, `playerId`, `walletId`, `roundId`, `gameId`, `kind`, `money.amount` normalizado em 2 casas, `money.currency` e `referenceExternalTransactionId` (omitido quando ausente). `playerId` e `walletId` entram em minúsculas. O cabeçalho, a própria key, o `messageId` e demais metadados de transporte ficam fora. O hash é o mesmo para HTTP e SQS.
+- `payloadHash` = SHA-256 (hexadecimal) do **JSON canônico** (chaves ordenadas em todos os níveis, sem espaços) destes campos: `providerId`, `externalTransactionId`, `playerId`, `walletId`, `roundId`, `gameId`, `kind`, `money.amount` (sempre com 2 casas), `money.currency` e `referenceExternalTransactionId` (omitido quando ausente). `playerId` e `walletId` entram em minúsculas. O cabeçalho, a própria key, o `messageId` e demais metadados de transporte ficam fora. O hash é o mesmo para HTTP e SQS.
 
 | Situação | Resultado |
 |---|---|
@@ -282,7 +282,7 @@ Pontos em que o enunciado é ambíguo ou silencioso, e o que foi adotado.
 | 6 | "Saldo observado naquele momento" no replay | Gravado na própria transação, inclusive nas rejeitadas, com a sua moeda |
 | 7 | Versão da wallet | Nasce em 1, mesmo com saldo inicial; aumenta a cada mudança de saldo |
 | 8 | Valor zero | Só `LOSS` aceita `0.00`. Nas demais é payload inválido |
-| 9 | Formato do valor | Até 2 casas na entrada, sempre 2 na saída; mais de 2 casas é rejeitado |
+| 9 | Formato do valor | Exatamente 2 casas, na entrada e na saída. O enunciado lista "mais de 2 casas" como inválido e não cita "menos de 2"; foi adotada a leitura estrita de "escala fixa de 2 casas" |
 | 10 | Referência encontrada, mas não finalizada | A dependente aguarda. Divergência de contexto só é avaliada quando a referência chega a um estado final |
 | 11 | Transação `OPENING` | Identificadores sintéticos: provedor `internal`, id externo igual ao id da wallet, key `opening:{walletId}`. O provedor `internal` é reservado. Emite eventos como qualquer transação |
 | 12 | Mesmo provedor e id externo sob outra idempotency key | Conflito 409 |

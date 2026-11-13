@@ -47,7 +47,7 @@ export function computePayloadHash(payload: PayloadHashFields): string {
     roundId: payload.roundId,
     gameId: payload.gameId,
     kind: payload.kind,
-    // Normalizado em 2 casas: "25" e "25.00" são o mesmo payload.
+    // Passa pelo Money: valor ou moeda fora do contrato não geram hash.
     money: Money.from(payload.money).toJSON(),
     referenceExternalTransactionId: payload.referenceExternalTransactionId ?? undefined,
   };
