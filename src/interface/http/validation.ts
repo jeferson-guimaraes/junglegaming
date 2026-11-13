@@ -29,3 +29,25 @@ export function money(valor: unknown, campo: string): Money {
     throw erro;
   }
 }
+
+/** Texto livre obrigatório: não vazio, com tamanho máximo e só com caracteres que o banco aceita. */
+export function texto(valor: unknown, campo: string, maximo = 200): string {
+  if (typeof valor !== 'string' || valor.length === 0) {
+    throw new InvalidPayloadError(`${campo} deve ser um texto não vazio`);
+  }
+  if (valor.length > maximo) {
+    throw new InvalidPayloadError(`${campo} deve ter no máximo ${maximo} caracteres`);
+  }
+  // Byte nulo e surrogate solto não são aceitos pelo PostgreSQL (text e jsonb).
+  if (valor.includes('\u0000') || !valor.isWellFormed()) {
+    throw new InvalidPayloadError(`${campo} contém caractere inválido`);
+  }
+  return valor;
+}
+
+export function umDe<T extends string>(valor: unknown, campo: string, opcoes: readonly T[]): T {
+  if (typeof valor !== 'string' || !opcoes.includes(valor as T)) {
+    throw new InvalidPayloadError(`${campo} deve ser um de: ${opcoes.join(', ')}`);
+  }
+  return valor as T;
+}

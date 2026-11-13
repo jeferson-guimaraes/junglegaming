@@ -40,3 +40,35 @@ export class TransientInfrastructureError extends ApplicationError {
     super('Falha transitória de infraestrutura; tente novamente');
   }
 }
+
+export class TransactionNotFoundError extends ApplicationError {
+  readonly code = 'TRANSACTION_NOT_FOUND';
+
+  constructor() {
+    super('Transação não encontrada');
+  }
+}
+
+/**
+ * A idempotency key já foi usada com outro payload, ou o par provider/externalTransactionId
+ * já existe sob outra key. Não é replay: o provedor precisa corrigir a requisição.
+ */
+export class IdempotencyConflictError extends ApplicationError {
+  readonly code = 'IDEMPOTENCY_CONFLICT';
+}
+
+/** O insert da transação bateu numa chave única: outra operação gravou a mesma transação antes. */
+export class DuplicateTransactionError extends ApplicationError {
+  readonly code = 'DUPLICATE_TRANSACTION';
+
+  constructor(readonly constraint: string) {
+    super(`Transação duplicada (${constraint})`);
+  }
+}
+
+/** A wallet mudou entre a leitura e a gravação. Não deve ocorrer sob o lock; tratado como transitório. */
+export class ConcurrentUpdateError extends TransientInfrastructureError {
+  constructor(walletId: string) {
+    super(`versão da wallet ${walletId} mudou`);
+  }
+}

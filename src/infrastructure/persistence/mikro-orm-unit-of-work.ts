@@ -1,11 +1,18 @@
-import { UniqueConstraintViolationException } from '@mikro-orm/core';
+import { LockMode, UniqueConstraintViolationException } from '@mikro-orm/core';
 import { type EntityManager, MikroORM } from '@mikro-orm/postgresql';
 import { Injectable } from '@nestjs/common';
-import { TransientInfrastructureError, WalletAlreadyExistsError } from '@/application/errors';
+import {
+  ConcurrentUpdateError,
+  DuplicateTransactionError,
+  TransientInfrastructureError,
+  WalletAlreadyExistsError,
+} from '@/application/errors';
 import { type Repositories, UnitOfWork } from '@/application/ports';
+import type { WagerTransaction } from '@/domain/wager-transaction';
 import {
   ledgerEntryToRecord,
   outboxToRecord,
+  transactionFromRecord,
   transactionToRecord,
   walletFromRecord,
   walletToRecord,
@@ -45,6 +52,14 @@ export function isTransient(erro: unknown): boolean {
   return TRANSITORIOS.has(code) || code.startsWith('08'); // 08xxx: exceções de conexão
 }
 
+async function umaTransacao(
+  em: EntityManager,
+  where: Partial<WagerTransactionRecord>,
+): Promise<WagerTransaction | undefined> {
+  const record = await em.findOne(WagerTransactionRecord, where);
+  return record ? transactionFromRecord(record) : undefined;
+}
+
 /**
  * Repositórios presos ao EntityManager de uma transação. Cada escrita é um comando SQL
  * imediato (sem unit of work do ORM), então a ordem dos comandos é a ordem do código.
@@ -66,10 +81,58 @@ function repositories(em: EntityManager): Repositories {
         const record = await em.findOne(WalletRecord, { id });
         return record ? walletFromRecord(record) : undefined;
       },
+      async findByIdForUpdate(id) {
+        const record = await em.findOne(
+          WalletRecord,
+          { id },
+          { lockMode: LockMode.PESSIMISTIC_WRITE },
+        );
+        return record ? walletFromRecord(record) : undefined;
+      },
+      async update(wallet, expectedVersion) {
+        const alteradas = await em.nativeUpdate(
+          WalletRecord,
+          { id: wallet.id, version: expectedVersion },
+          {
+            balance: wallet.balance.toJSON().amount,
+            version: wallet.version,
+            updatedAt: wallet.updatedAt,
+          },
+        );
+        if (alteradas !== 1) throw new ConcurrentUpdateError(wallet.id);
+      },
     },
     transactions: {
       async insert(transaction) {
-        await em.insert(WagerTransactionRecord, transactionToRecord(transaction));
+        try {
+          await em.insert(WagerTransactionRecord, transactionToRecord(transaction));
+        } catch (erro) {
+          const constraint = uniqueViolada(erro);
+          if (
+            constraint === 'wager_transactions_idempotency_key_unique' ||
+            constraint === 'wager_transactions_provider_external_unique'
+          ) {
+            throw new DuplicateTransactionError(constraint);
+          }
+          throw erro;
+        }
+      },
+      async findById(id) {
+        return umaTransacao(em, { id });
+      },
+      async findByIdempotencyKey(idempotencyKey) {
+        return umaTransacao(em, { idempotencyKey });
+      },
+      async findByExternalId(providerId, externalTransactionId) {
+        return umaTransacao(em, { providerId, externalTransactionId });
+      },
+      async hasProcessedReversal(transactionId) {
+        const quantidade = await em.count(WagerTransactionRecord, {
+          referenceTransactionId: transactionId,
+          status: 'PROCESSED',
+          kind: { $in: ['REFUND', 'ROLLBACK'] },
+        });
+        return quantidade > 0;
       },
     },
     ledger: {
@@ -97,6 +160,7 @@ export class MikroOrmUnitOfWork extends UnitOfWork {
       .fork()
       .transactional((em) => work(repositories(em)))
       .catch((erro: unknown) => {
+        if (erro instanceof TransientInfrastructureError) throw erro;
         if (isTransient(erro)) {
           throw new TransientInfrastructureError(String((erro as { code: string }).code));
         }
