@@ -19,3 +19,56 @@ services:
     image: ministackorg/ministack:1.5.40
     ports:
       - "${SQS_PORT:-4566}:4566"
+
+  # Roda as migrations uma vez e termina; as réplicas só sobem depois que ele concluir.
+  migrate:
+    image: wagering-app:local
+    build: .
+    command: ["bun", "run", "scripts/migrate.ts", "up"]
+    environment: &app-env
+      DATABASE_URL: postgres://wagering:wagering@postgres:5432/wagering
+      SQS_ENDPOINT: http://ministack:4566
+      AWS_REGION: us-east-1
+      AWS_ACCESS_KEY_ID: test
+      AWS_SECRET_ACCESS_KEY: test
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+  # Três réplicas idênticas: cada uma atende HTTP, consome a fila de transações, publica a
+  # outbox e reprocessa pendentes. Não há balanceador: cada réplica tem a sua porta no host.
+  app-1: &app
+    image: wagering-app:local
+    build: .
+    environment: *app-env
+    ports:
+      - "${APP_1_PORT:-3100}:3000"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      ministack:
+        condition: service_healthy
+    healthcheck:
+      test:
+        - CMD
+        - bun
+        - -e
+        - "fetch('http://localhost:3000/health/live').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    # Maior que SHUTDOWN_TIMEOUT_MS (8 s): o processo termina sozinho antes do SIGKILL.
+    stop_grace_period: 15s
+    restart: unless-stopped
+
+  app-2:
+    <<: *app
+    ports:
+      - "${APP_2_PORT:-3101}:3000"
+
+  app-3:
+    <<: *app
+    ports:
+      - "${APP_3_PORT:-3102}:3000"
