@@ -1,6 +1,10 @@
 export interface Env {
   port: number;
   databaseUrl: string;
+  /** Máximo de conexões do pool por instância. */
+  dbPoolMax: number;
+  /** Prazo de espera por lock de linha; estourado, a operação falha como erro transitório. */
+  dbLockTimeoutMs: number;
   sqsEndpoint: string;
   awsRegion: string;
   awsAccessKeyId: string;
@@ -24,6 +28,8 @@ export function loadEnv(source: Record<string, string | undefined> = process.env
   return {
     port: inteiro('PORT', source.PORT, 3000),
     databaseUrl: source.DATABASE_URL ?? 'postgres://wagering:wagering@localhost:5432/wagering',
+    dbPoolMax: inteiro('DB_POOL_MAX', source.DB_POOL_MAX, 10),
+    dbLockTimeoutMs: inteiro('DB_LOCK_TIMEOUT_MS', source.DB_LOCK_TIMEOUT_MS, 3000),
     sqsEndpoint: source.SQS_ENDPOINT ?? 'http://localhost:4566',
     awsRegion: source.AWS_REGION ?? 'us-east-1',
     awsAccessKeyId: source.AWS_ACCESS_KEY_ID ?? 'test',

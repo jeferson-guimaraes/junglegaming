@@ -12,6 +12,10 @@ interface OrmConfigInput {
   migrationsList?: Constructor<Migration>[] | undefined;
   // biome-ignore lint/suspicious/noExplicitAny: lista heterogênea de schemas
   entities?: EntitySchema<any>[] | undefined;
+  /** Máximo de conexões do pool. Sem valor, vale o padrão do driver. */
+  poolMax?: number | undefined;
+  /** Prazo de espera por lock de linha; estourado, o PostgreSQL devolve erro (55P03). */
+  lockTimeoutMs?: number | undefined;
 }
 
 export function createOrmConfig(input: OrmConfigInput): Options {
@@ -20,6 +24,11 @@ export function createOrmConfig(input: OrmConfigInput): Options {
     entities: input.entities ?? entities,
     discovery: { warnWhenNoEntities: false },
     extensions: [Migrator],
+    ...(input.poolMax === undefined ? {} : { pool: { max: input.poolMax } }),
+    // Parâmetro de sessão aplicado pelo servidor a cada conexão nova do pool.
+    ...(input.lockTimeoutMs === undefined
+      ? {}
+      : { driverOptions: { options: `-c lock_timeout=${input.lockTimeoutMs}` } }),
     migrations: {
       migrationsList: input.migrationsList ?? migrations,
       tableName: 'schema_migrations',
