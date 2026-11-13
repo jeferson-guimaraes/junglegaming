@@ -3,8 +3,8 @@ import { GetWallet, OpenWallet } from '@/application/wallets.use-cases';
 import type { MoneyProps } from '@/domain/money';
 import type { Wallet } from '@/domain/wallet';
 import { currentCorrelationId, newCorrelationId } from '@/infrastructure/observability/correlation';
+import { money, objeto, uuid } from '../../validation';
 import { AuthGuard } from '../auth.guard';
-import { money, objeto, uuid } from '../validation';
 
 interface WalletResponse {
   id: string;

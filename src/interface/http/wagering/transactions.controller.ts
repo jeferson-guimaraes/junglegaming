@@ -5,23 +5,11 @@ import {
   ProcessWagerTransaction,
 } from '@/application/process-wager-transaction';
 import type { MoneyProps } from '@/domain/money';
-import {
-  type WagerTransaction,
-  WagerTransactionKind,
-  WagerTransactionStatus,
-} from '@/domain/wager-transaction';
+import { type WagerTransaction, WagerTransactionStatus } from '@/domain/wager-transaction';
 import { currentCorrelationId, newCorrelationId } from '@/infrastructure/observability/correlation';
+import { texto, uuid } from '../../validation';
+import { parseWagerTransaction } from '../../wager-transaction.input';
 import { AuthGuard } from '../auth.guard';
-import { money, objeto, texto, umDe, uuid } from '../validation';
-
-/** Tipos que um provedor pode submeter. OPENING é interno. */
-const KINDS_ACEITOS = [
-  WagerTransactionKind.Bet,
-  WagerTransactionKind.Win,
-  WagerTransactionKind.Loss,
-  WagerTransactionKind.Refund,
-  WagerTransactionKind.Rollback,
-] as const;
 
 /**
  * Um status por situação. O replay devolve o estado atual da transação: uma rejeição continua
@@ -90,23 +78,10 @@ export class TransactionsController {
     @Body() body: unknown,
     @Res({ passthrough: true }) response: Response,
   ): Promise<SubmissionResponse> {
-    const payload = objeto(body, 'corpo');
-    const referencia = payload.referenceExternalTransactionId;
     const { transaction, idempotentReplay } = await this.processTransaction.execute({
-      idempotencyKey: texto(idempotencyKey, 'cabeçalho Idempotency-Key', 300),
-      providerId: texto(payload.providerId, 'providerId'),
-      externalTransactionId: texto(payload.externalTransactionId, 'externalTransactionId'),
-      playerId: uuid(payload.playerId, 'playerId'),
-      walletId: uuid(payload.walletId, 'walletId'),
-      roundId: texto(payload.roundId, 'roundId'),
-      gameId: texto(payload.gameId, 'gameId'),
-      kind: umDe(payload.kind, 'kind', KINDS_ACEITOS),
-      money: money(payload.money, 'money'),
-      referenceExternalTransactionId:
-        referencia === undefined || referencia === null
-          ? undefined
-          : texto(referencia, 'referenceExternalTransactionId'),
+      ...parseWagerTransaction(body, idempotencyKey),
       correlationId: currentCorrelationId() ?? newCorrelationId(),
+      causationId: undefined,
     });
     response.status(STATUS_HTTP[transaction.status]);
     return { ...resultado(transaction), idempotentReplay };

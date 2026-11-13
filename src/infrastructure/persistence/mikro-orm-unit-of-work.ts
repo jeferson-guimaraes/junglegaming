@@ -3,21 +3,30 @@ import { type EntityManager, MikroORM } from '@mikro-orm/postgresql';
 import { Injectable } from '@nestjs/common';
 import {
   ConcurrentUpdateError,
+  DuplicateInboxMessageError,
   DuplicateTransactionError,
   TransientInfrastructureError,
   WalletAlreadyExistsError,
 } from '@/application/errors';
 import { type Repositories, UnitOfWork } from '@/application/ports';
+import { InboxMessage } from '@/domain/inbox-message';
 import type { WagerTransaction } from '@/domain/wager-transaction';
 import {
   ledgerEntryToRecord,
+  outboxFromRecord,
   outboxToRecord,
   transactionFromRecord,
   transactionToRecord,
   walletFromRecord,
   walletToRecord,
 } from './mappers';
-import { LedgerEntryRecord, OutboxRecord, WagerTransactionRecord, WalletRecord } from './records';
+import {
+  InboxRecord,
+  LedgerEntryRecord,
+  OutboxRecord,
+  WagerTransactionRecord,
+  WalletRecord,
+} from './records';
 
 /** Nome da constraint violada, quando o erro é de chave única. */
 function uniqueViolada(erro: unknown): string | undefined {
@@ -192,6 +201,54 @@ function repositories(em: EntityManager): Repositories {
     outbox: {
       async insert(message) {
         await em.insert(OutboxRecord, outboxToRecord(message));
+      },
+      async lockDueBatch(now, limit) {
+        const records = await em.find(
+          OutboxRecord,
+          { publishedAt: null, nextAttemptAt: { $lte: now } },
+          {
+            // O id (UUID v7) desempata eventos da mesma operação, que têm a mesma data.
+            orderBy: { attempts: 'asc', occurredAt: 'asc', id: 'asc' },
+            limit,
+            lockMode: LockMode.PESSIMISTIC_PARTIAL_WRITE, // FOR UPDATE SKIP LOCKED
+          },
+        );
+        return records.map(outboxFromRecord);
+      },
+      async update(message) {
+        await em.nativeUpdate(
+          OutboxRecord,
+          { id: message.id },
+          {
+            attempts: message.attempts,
+            nextAttemptAt: message.nextAttemptAt ?? null,
+            publishedAt: message.publishedAt ?? null,
+          },
+        );
+      },
+    },
+    inbox: {
+      async find(consumerName, messageId) {
+        const record = await em.findOne(InboxRecord, { consumerName, messageId });
+        return record
+          ? InboxMessage.rehydrate({ ...record, processedAt: record.processedAt ?? undefined })
+          : undefined;
+      },
+      async insert(message) {
+        try {
+          await em.insert(InboxRecord, {
+            consumerName: message.consumerName,
+            messageId: message.messageId,
+            payloadHash: message.payloadHash,
+            receivedAt: message.receivedAt,
+            processedAt: message.processedAt ?? null,
+          });
+        } catch (erro) {
+          if (uniqueViolada(erro) === 'inbox_messages_pkey') {
+            throw new DuplicateInboxMessageError(message.messageId);
+          }
+          throw erro;
+        }
       },
     },
   };

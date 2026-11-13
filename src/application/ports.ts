@@ -1,3 +1,4 @@
+import type { InboxMessage } from '@/domain/inbox-message';
 import type { OutboxMessage } from '@/domain/outbox-message';
 import type { WagerTransaction } from '@/domain/wager-transaction';
 import type { Wallet } from '@/domain/wallet';
@@ -59,6 +60,26 @@ export interface LedgerRepository {
 
 export interface OutboxRepository {
   insert(message: OutboxMessage): Promise<void>;
+  /**
+   * Trava e devolve um lote de eventos pendentes e vencidos (`FOR UPDATE SKIP LOCKED`):
+   * publishers concorrentes pegam lotes disjuntos, sem esperar um pelo outro. Eventos nunca
+   * tentados vêm antes dos que estão em nova tentativa.
+   */
+  lockDueBatch(now: Date, limit: number): Promise<OutboxMessage[]>;
+  /** Grava o resultado da tentativa de publicação (publicado ou reagendado). */
+  update(message: OutboxMessage): Promise<void>;
+}
+
+export interface InboxRepository {
+  find(consumerName: string, messageId: string): Promise<InboxMessage | undefined>;
+  /** Lança DuplicateInboxMessageError se a mensagem já foi registrada por outra transação. */
+  insert(message: InboxMessage): Promise<void>;
+}
+
+/** Destino dos eventos de integração (fila de eventos). */
+export abstract class EventPublisher {
+  /** Deve ser seguro repetir: o mesmo evento publicado duas vezes carrega o mesmo identificador. */
+  abstract publish(message: OutboxMessage): Promise<void>;
 }
 
 /** Repositórios presos a uma mesma transação SQL. */
@@ -67,6 +88,7 @@ export interface Repositories {
   transactions: WagerTransactionRepository;
   ledger: LedgerRepository;
   outbox: OutboxRepository;
+  inbox: InboxRepository;
 }
 
 /**

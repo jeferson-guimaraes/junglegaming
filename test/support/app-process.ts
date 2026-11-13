@@ -35,7 +35,17 @@ export async function stopAllApps(): Promise<void> {
 export async function startApp(env: Record<string, string> = {}): Promise<AppProcess> {
   const proc = Bun.spawn(['bun', 'run', 'src/main.ts'], {
     cwd: RAIZ,
-    env: { ...process.env, PORT: '0', LOG_LEVEL: 'info', ...env },
+    // Workers e consumer desligados por padrão: cada teste liga só o que exercita, e nenhum
+    // processo de teste consome as filas padrão sem querer.
+    env: {
+      ...process.env,
+      PORT: '0',
+      LOG_LEVEL: 'info',
+      CONSUMER_ENABLED: 'false',
+      OUTBOX_PUBLISHER_ENABLED: 'false',
+      PENDING_WORKER_ENABLED: 'false',
+      ...env,
+    },
     stdout: 'pipe',
     stderr: 'inherit',
   });
