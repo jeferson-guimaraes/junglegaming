@@ -14,6 +14,8 @@
     "test:conc": "bun test --timeout 60000 ./test/concurrency",
     "infra:up": "docker compose up -d --wait postgres ministack",
     "infra:down": "docker compose down -v",
+    "stack:up": "docker compose up -d --build --wait",
+    "stack:down": "docker compose down -v",
     "migration:up": "bun run scripts/migrate.ts up",
     "migration:down": "bun run scripts/migrate.ts down",
     "queues:setup": "bun run scripts/setup-queues.ts"
