@@ -1,11 +1,9 @@
 import { Injectable } from '@nestjs/common';
 import { InvalidMoneyError, InvalidTransactionError } from '@/domain/errors';
-import type { EventContext } from '@/domain/events';
 import type { Money } from '@/domain/money';
-import { OutboxMessage } from '@/domain/outbox-message';
 import { computePayloadHash } from '@/domain/payload-hash';
 import { WagerTransaction, type WagerTransactionKind } from '@/domain/wager-transaction';
-import { applyWagerTransaction, eventsFor } from '@/domain/wagering-rules';
+import { applyAndPersist } from './apply-and-persist';
 import {
   DuplicateTransactionError,
   IdempotencyConflictError,
@@ -75,11 +73,12 @@ export class ProcessWagerTransaction {
   }
 
   private async aplicar(
-    { wallets, transactions, ledger, outbox }: Repositories,
+    repositories: Repositories,
     command: WagerTransactionCommand,
     id: string,
     payloadHash: string,
   ): Promise<WagerTransactionResult> {
+    const { wallets, transactions } = repositories;
     const wallet = await wallets.findByIdForUpdate(command.walletId);
     if (!wallet) throw new WalletNotFoundError(command.walletId);
     // O relógio é lido depois do lock: as datas seguem a ordem real de aplicação na wallet.
@@ -89,39 +88,15 @@ export class ProcessWagerTransaction {
     const existente = await localizar(transactions, command, payloadHash);
     if (existente) return existente;
 
-    const reference = nova.referenceExternalTransactionId
-      ? await transactions.findByExternalId(nova.providerId, nova.referenceExternalTransactionId)
-      : undefined;
-    const referenceAlreadyReversed =
-      reference !== undefined &&
-      nova.requiresReference() &&
-      (await transactions.hasProcessedReversal(reference.id));
-
-    const versaoAntes = wallet.version;
-    const outcome = applyWagerTransaction({
+    await applyAndPersist(repositories, {
       wallet,
       transaction: nova,
-      reference,
-      referenceAlreadyReversed,
-      entryId: this.ids.next(),
-      now,
-    });
-    const nextContext = (): EventContext => ({
-      eventId: this.ids.next(),
+      novo: true,
       correlationId: command.correlationId,
       causationId: command.causationId,
-      occurredAt: now,
+      now,
+      ids: this.ids,
     });
-    const eventos = eventsFor({ wallet, transaction: nova, outcome, nextContext });
-
-    await transactions.insert(nova);
-    if (outcome.ledgerEntry) {
-      await wallets.update(wallet, versaoAntes);
-      await ledger.insert(outcome.ledgerEntry);
-    }
-    for (const evento of eventos) {
-      await outbox.insert(OutboxMessage.enqueue(evento));
-    }
     return { transaction: nova, idempotentReplay: false };
   }
 }

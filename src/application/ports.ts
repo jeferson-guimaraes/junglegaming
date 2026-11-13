@@ -26,10 +26,24 @@ export interface WalletRepository {
   update(wallet: Wallet, expectedVersion: number): Promise<void>;
 }
 
+export interface PendingReferenceCandidate {
+  id: string;
+  walletId: string;
+}
+
 export interface WagerTransactionRepository {
   /** Lança DuplicateTransactionError se a idempotency key ou o par provider/external já existir. */
   insert(transaction: WagerTransaction): Promise<void>;
+  /**
+   * Grava o resultado de uma transação que estava PENDING_REFERENCE. Condicionado a esse
+   * status: lança ConcurrentUpdateError se a linha já tiver saído dele.
+   */
+  updatePending(transaction: WagerTransaction): Promise<void>;
   findById(id: string): Promise<WagerTransaction | undefined>;
+  /** `SELECT … FOR UPDATE`. Sempre depois do lock da wallet (ordem única: wallet → transação). */
+  findByIdForUpdate(id: string): Promise<WagerTransaction | undefined>;
+  /** Pendentes de referência com nova tentativa vencida. Leitura sem lock: só candidatas. */
+  findDuePendingReferences(now: Date, limit: number): Promise<PendingReferenceCandidate[]>;
   findByIdempotencyKey(idempotencyKey: string): Promise<WagerTransaction | undefined>;
   findByExternalId(
     providerId: string,

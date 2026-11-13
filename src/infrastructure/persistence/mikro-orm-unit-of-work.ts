@@ -52,6 +52,12 @@ export function isTransient(erro: unknown): boolean {
   return TRANSITORIOS.has(code) || code.startsWith('08'); // 08xxx: exceções de conexão
 }
 
+/**
+ * Índice único da reversão única. Sob o lock da wallet a regra de domínio rejeita antes;
+ * se mesmo assim o banco barrar, nada foi gravado e a operação é tratada como transitória.
+ */
+const REVERSAO_UNICA = 'wager_transactions_single_reversal';
+
 async function umaTransacao(
   em: EntityManager,
   where: Partial<WagerTransactionRecord>,
@@ -114,11 +120,54 @@ function repositories(em: EntityManager): Repositories {
           ) {
             throw new DuplicateTransactionError(constraint);
           }
+          if (constraint === REVERSAO_UNICA) throw new ConcurrentUpdateError(transaction.walletId);
           throw erro;
         }
       },
+      async updatePending(transaction) {
+        const { id: _id, ...campos } = transactionToRecord(transaction);
+        let alteradas: number;
+        try {
+          alteradas = await em.nativeUpdate(
+            WagerTransactionRecord,
+            { id: transaction.id, status: 'PENDING_REFERENCE' },
+            {
+              status: campos.status,
+              failureCode: campos.failureCode,
+              referenceTransactionId: campos.referenceTransactionId,
+              observedBalance: campos.observedBalance,
+              observedBalanceCurrency: campos.observedBalanceCurrency,
+              processedAt: campos.processedAt,
+              referenceAttempts: campos.referenceAttempts,
+              nextReferenceAttemptAt: campos.nextReferenceAttemptAt,
+            },
+          );
+        } catch (erro) {
+          if (uniqueViolada(erro) === REVERSAO_UNICA) {
+            throw new ConcurrentUpdateError(transaction.walletId);
+          }
+          throw erro;
+        }
+        if (alteradas !== 1) throw new ConcurrentUpdateError(transaction.walletId);
+      },
       async findById(id) {
         return umaTransacao(em, { id });
+      },
+      async findByIdForUpdate(id) {
+        const record = await em.findOne(
+          WagerTransactionRecord,
+          { id },
+          { lockMode: LockMode.PESSIMISTIC_WRITE },
+        );
+        return record ? transactionFromRecord(record) : undefined;
+      },
+      async findDuePendingReferences(now, limit) {
+        const records = await em.find(
+          WagerTransactionRecord,
+          { status: 'PENDING_REFERENCE', nextReferenceAttemptAt: { $lte: now } },
+          { orderBy: { nextReferenceAttemptAt: 'asc' }, limit, fields: ['id', 'walletId'] },
+        );
+        return records.map((record) => ({ id: record.id, walletId: record.walletId }));
       },
       async findByIdempotencyKey(idempotencyKey) {
         return umaTransacao(em, { idempotencyKey });

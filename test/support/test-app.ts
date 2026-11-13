@@ -27,9 +27,13 @@ export interface TestApp {
 }
 
 /** Aplicação Nest em memória (HTTP real em porta efêmera) sobre um banco exclusivo do arquivo. */
-export async function startTestApp(env: Record<string, string> = {}): Promise<TestApp> {
+export async function startTestApp(
+  env: Record<string, string> = {},
+  configurarPrincipal: (builder: TestingModuleBuilder) => TestingModuleBuilder = (b) => b,
+): Promise<TestApp> {
   const db = await createTestDatabase();
-  const variaveis = { DATABASE_URL: db.url, ...env };
+  // Os workers ficam desligados: cada teste dispara os ciclos na hora que quiser.
+  const variaveis = { DATABASE_URL: db.url, PENDING_WORKER_ENABLED: 'false', ...env };
   const anteriores = new Map<string, string | undefined>();
   for (const [nome, valor] of Object.entries(variaveis)) {
     anteriores.set(nome, process.env[nome]);
@@ -49,7 +53,7 @@ export async function startTestApp(env: Record<string, string> = {}): Promise<Te
     return { app, baseUrl: await app.getUrl() };
   }
 
-  const principal = await subir();
+  const principal = await subir(configurarPrincipal);
   const sql = <T = Linha>(texto: string, params: unknown[] = []) =>
     db.orm.em.getConnection().execute<T[]>(texto, params);
 
