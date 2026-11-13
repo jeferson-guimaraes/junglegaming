@@ -49,6 +49,10 @@ export class PublishOutbox {
               attempts: message.attempts,
             });
           }
+          await outbox.update(message);
+          // Para na primeira falha: se o broker está fora, insistir no resto do lote só manteria
+          // a transação SQL aberta. Os demais seguem pendentes e voltam no próximo ciclo.
+          break;
         }
         await outbox.update(message);
       }

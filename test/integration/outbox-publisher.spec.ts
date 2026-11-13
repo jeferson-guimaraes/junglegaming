@@ -220,14 +220,22 @@ describe('Publisher da outbox: falhas, concorrência e ordem', () => {
     expect((await estado())?.published_at).not.toBeNull();
   });
 
-  it('um evento que falha não impede a publicação dos outros do mesmo lote', async () => {
+  it('o ciclo para na primeira falha; os demais eventos seguem pendentes e saem no ciclo seguinte', async () => {
     const ids = await semear(5);
     gravador.falharSe = (m) => m.id === ids[2];
 
-    const resumo = await fake.publish.runOnce();
+    const primeiro = await fake.publish.runOnce();
 
-    expect(resumo).toMatchObject({ publicados: 4, reagendados: 1 });
-    expect(gravador.enviados.sort()).toEqual(ids.filter((_, i) => i !== 2).sort());
+    expect(primeiro).toMatchObject({ publicados: 2, reagendados: 1 });
+    expect(gravador.enviados).toEqual(ids.slice(0, 2));
+    expect(await real.contar('outbox_messages', 'id in (?) and published_at is null', [ids])).toBe(
+      3,
+    );
+
+    const segundo = await fake.publish.runOnce();
+
+    expect(segundo).toMatchObject({ publicados: 2, reagendados: 0 });
+    expect(gravador.enviados).toEqual([ids[0], ids[1], ids[3], ids[4]] as string[]);
   });
 
   it('evento ainda não confirmado no banco não é publicado', async () => {
@@ -251,7 +259,7 @@ describe('Publisher da outbox: falhas, concorrência e ordem', () => {
     }
   });
 
-  it('publishers concorrentes pegam lotes diferentes: cada evento é enviado uma única vez, sem um esperar o outro', async () => {
+  it('publishers concorrentes pegam lotes diferentes: cada evento é enviado uma única vez', async () => {
     const ids = await semear(OUTBOX_BATCH_SIZE * 3);
     gravador.atrasoMs = 10; // alarga a janela em que os lotes ficam travados
 
@@ -261,7 +269,6 @@ describe('Publisher da outbox: falhas, concorrência e ordem', () => {
       fake.publish.runOnce(),
     ]);
 
-    // Se um esperasse o lock do outro, pegaria um lote vazio; com SKIP LOCKED todos trabalham.
     expect(resumos.map((r) => r.publicados)).toEqual([
       OUTBOX_BATCH_SIZE,
       OUTBOX_BATCH_SIZE,
@@ -270,6 +277,33 @@ describe('Publisher da outbox: falhas, concorrência e ordem', () => {
     expect(gravador.enviados).toHaveLength(ids.length);
     expect(new Set(gravador.enviados).size).toBe(ids.length);
     expect(await real.contar('outbox_messages', 'published_at is null')).toBe(0);
+  });
+
+  it('um lote travado por outro publisher é pulado, não esperado (SKIP LOCKED)', async () => {
+    const travados = await semear(OUTBOX_BATCH_SIZE);
+    const livres = await semear(3);
+    // Outro publisher, parado no meio do envio, segura o primeiro lote.
+    const outro = real.db.orm.em.fork();
+    await outro.begin();
+    try {
+      await outro
+        .getConnection()
+        .execute(
+          'select id from outbox_messages where id in (?) for update',
+          [travados],
+          'all',
+          outro.getTransactionContext(),
+        );
+
+      const inicio = Date.now();
+      const resumo = await fake.publish.runOnce();
+
+      expect(Date.now() - inicio).toBeLessThan(2000);
+      expect(resumo.publicados).toBe(3);
+      expect(gravador.enviados.sort()).toEqual([...livres].sort());
+    } finally {
+      await outro.rollback();
+    }
   });
 
   it('eventos novos são publicados antes dos que estão em nova tentativa, por mais que estes sejam', async () => {
@@ -283,8 +317,7 @@ describe('Publisher da outbox: falhas, concorrência e ordem', () => {
     const resumo = await fake.publish.runOnce();
 
     expect(gravador.enviados).toEqual([novo as string]);
-    expect(resumo.publicados).toBe(1);
-    expect(resumo.reagendados).toBe(OUTBOX_BATCH_SIZE - 1);
+    expect(resumo).toMatchObject({ publicados: 1, reagendados: 1 });
   });
 
   it('os eventos de uma mesma operação saem na ordem em que foram gerados', async () => {

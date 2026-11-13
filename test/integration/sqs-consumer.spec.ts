@@ -198,6 +198,21 @@ describe('Consumer SQS: inbox e reentrega', () => {
     expect((await resumoDaWallet(t, wallet.id)).balance).toBe('75.00');
   });
 
+  it('o mesmo messageId e conteúdo com outra idempotency key também é permanente (DLQ na hora)', async () => {
+    const wallet = await t.criarWallet('100.00');
+    const pedido = transacao(wallet);
+    const msg = mensagem(pedido);
+    await publicar(msg, wallet.id);
+    await esperarTransacao(pedido);
+    const outraChave = { ...msg, data: { ...msg.data, idempotencyKey: `outra-${randomUUID()}` } };
+
+    await publicar(outraChave, wallet.id);
+
+    const [morta] = await naDlq(1, 5000);
+    expect(morta?.MessageAttributes?.motivo?.StringValue).toBe('INBOX_PAYLOAD_MISMATCH');
+    expect((await resumoDaWallet(t, wallet.id)).balance).toBe('75.00');
+  });
+
   it('falha depois do registro de inbox desfaz também o inbox', async () => {
     const wallet = await t.criarWallet('100.00');
     const pedido = transacao(wallet);
@@ -436,7 +451,9 @@ describe('Consumer SQS: vários consumers e processos reais', () => {
       DATABASE_URL: t.db.url,
       CONSUMER_ENABLED: 'true',
       CONSUMER_WAIT_TIME_SECONDS: '1',
-      CONSUMER_VISIBILITY_TIMEOUT_SECONDS: '5',
+      // Visibilidade longa: se as mensagens recebidas e não iniciadas não fossem devolvidas no
+      // encerramento, só reapareceriam depois de 60 s e o prazo abaixo estouraria.
+      CONSUMER_VISIBILITY_TIMEOUT_SECONDS: '60',
     };
     const pedidos = wallets.flatMap((wallet) =>
       Array.from({ length: 15 }, () => ({

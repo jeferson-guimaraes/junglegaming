@@ -120,6 +120,7 @@ export class WagerTransactionsConsumer implements OnApplicationBootstrap, OnModu
 
   private async receber(queueUrl: string): Promise<Message[]> {
     this.recebimento = new AbortController();
+    if (!this.ativo) return []; // o encerramento chegou antes de este recebimento começar
     const saida = await this.client.send(
       new ReceiveMessageCommand({
         QueueUrl: queueUrl,
@@ -149,7 +150,17 @@ export class WagerTransactionsConsumer implements OnApplicationBootstrap, OnModu
             await this.devolver(filas, mensagem, 0);
             continue;
           }
-          interromper = !(await this.tratar(filas, mensagem));
+          try {
+            interromper = !(await this.tratar(filas, mensagem));
+          } catch (err) {
+            // Falha ao confirmar ou ao enviar à DLQ: a mensagem fica na fila e volta quando a
+            // visibilidade expirar. Se o efeito já foi gravado, o inbox absorve a reentrega.
+            interromper = true;
+            this.logger.warn(
+              { sqsMessageId: mensagem.MessageId, err: (err as Error)?.name },
+              'consumer: falha ao concluir a mensagem; ela volta à fila',
+            );
+          }
         }
       }),
     );

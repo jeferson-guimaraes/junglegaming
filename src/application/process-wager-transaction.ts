@@ -151,9 +151,9 @@ export class ProcessWagerTransaction {
     }
     if (mensagem.payloadHash !== payloadHash) throw new InboxPayloadMismatchError(inbox.messageId);
     const transaction = await transactions.findByIdempotencyKey(command.idempotencyKey);
-    if (!transaction) {
-      throw new TransientInfrastructureError('transação da mensagem repetida não encontrada');
-    }
+    // Mesmo messageId e mesmo conteúdo de negócio, mas com outra idempotency key: a key não
+    // entra no hash. É a mesma mensagem adulterada, e repetir não muda o resultado.
+    if (!transaction) throw new InboxPayloadMismatchError(inbox.messageId);
     return { transaction, idempotentReplay: true, duplicateMessage: true };
   }
 }

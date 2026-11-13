@@ -59,10 +59,13 @@ function booleano(nome: string, valor: string | undefined, padrao: boolean): boo
 
 /** Lê a configuração do ambiente. Os padrões apontam para o docker-compose local. */
 export function loadEnv(source: Record<string, string | undefined> = process.env): Env {
+  if (source.NODE_ENV === 'production' && source.FAULT_EXIT_BEFORE_ACK === 'true') {
+    throw new Error('FAULT_EXIT_BEFORE_ACK é só para teste e não pode ser ligada em produção');
+  }
   return {
     port: inteiro('PORT', source.PORT, 3000),
     databaseUrl: source.DATABASE_URL ?? 'postgres://wagering:wagering@localhost:5432/wagering',
-    dbPoolMax: inteiro('DB_POOL_MAX', source.DB_POOL_MAX, 10),
+    dbPoolMax: inteiro('DB_POOL_MAX', source.DB_POOL_MAX, 20),
     dbLockTimeoutMs: inteiro('DB_LOCK_TIMEOUT_MS', source.DB_LOCK_TIMEOUT_MS, 3000),
     sqsEndpoint: source.SQS_ENDPOINT ?? 'http://localhost:4566',
     awsRegion: source.AWS_REGION ?? 'us-east-1',
