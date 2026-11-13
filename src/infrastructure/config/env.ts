@@ -10,6 +10,10 @@ export interface Env {
   awsAccessKeyId: string;
   awsSecretAccessKey: string;
   logLevel: string;
+  /** Liga o worker que reprocessa transações à espera de referência. */
+  pendingWorkerEnabled: boolean;
+  /** Intervalo entre os ciclos do worker de pendentes. */
+  pendingWorkerIntervalMs: number;
   /** Prazo máximo do encerramento; deve ficar abaixo do tempo de espera do orquestrador (10 s no Docker). */
   shutdownTimeoutMs: number;
 }
@@ -21,6 +25,13 @@ function inteiro(nome: string, valor: string | undefined, padrao: number): numbe
     throw new Error(`Variável de ambiente ${nome} deve ser um inteiro, recebido "${valor}"`);
   }
   return numero;
+}
+
+function booleano(nome: string, valor: string | undefined, padrao: boolean): boolean {
+  if (valor === undefined || valor === '') return padrao;
+  if (valor === 'true') return true;
+  if (valor === 'false') return false;
+  throw new Error(`Variável de ambiente ${nome} deve ser "true" ou "false", recebido "${valor}"`);
 }
 
 /** Lê a configuração do ambiente. Os padrões apontam para o docker-compose local. */
@@ -35,6 +46,12 @@ export function loadEnv(source: Record<string, string | undefined> = process.env
     awsAccessKeyId: source.AWS_ACCESS_KEY_ID ?? 'test',
     awsSecretAccessKey: source.AWS_SECRET_ACCESS_KEY ?? 'test',
     logLevel: source.LOG_LEVEL ?? 'info',
+    pendingWorkerEnabled: booleano('PENDING_WORKER_ENABLED', source.PENDING_WORKER_ENABLED, true),
+    pendingWorkerIntervalMs: inteiro(
+      'PENDING_WORKER_INTERVAL_MS',
+      source.PENDING_WORKER_INTERVAL_MS,
+      1000,
+    ),
     shutdownTimeoutMs: inteiro('SHUTDOWN_TIMEOUT_MS', source.SHUTDOWN_TIMEOUT_MS, 8000),
   };
 }

@@ -5,6 +5,7 @@ import {
   GetWagerTransaction,
   ProcessWagerTransaction,
 } from './application/process-wager-transaction';
+import { ReprocessPendingReferences } from './application/reprocess-pending-references';
 import { GetWallet, OpenWallet } from './application/wallets.use-cases';
 import { loadEnv } from './infrastructure/config/env';
 import { ShutdownHookLogger } from './infrastructure/lifecycle/shutdown-hook.logger';
@@ -12,6 +13,7 @@ import { correlationMiddleware } from './infrastructure/observability/correlatio
 import { APP_LOGGER, createLogger } from './infrastructure/observability/logger';
 import { DatabaseModule } from './infrastructure/persistence/database.module';
 import { SystemClock, UuidV7Generator } from './infrastructure/system-adapters';
+import { PendingReferenceWorker } from './infrastructure/workers/pending-reference.worker';
 import { AuthGuard } from './interface/http/auth.guard';
 import { ErrorFilter } from './interface/http/error.filter';
 import { HealthController } from './interface/http/health/health.controller';
@@ -31,6 +33,8 @@ import { WalletsController } from './interface/http/wallets/wallets.controller';
     GetWallet,
     ProcessWagerTransaction,
     GetWagerTransaction,
+    ReprocessPendingReferences,
+    PendingReferenceWorker,
     ShutdownHookLogger,
   ],
 })

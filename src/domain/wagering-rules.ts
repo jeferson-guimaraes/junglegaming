@@ -142,7 +142,9 @@ function aguardarReferencia(
     return { transition: 'pending-reference', ledgerEntry: undefined };
   }
   if (input.reference) {
-    // Existe mas não foi finalizada: não gasta o prazo reservado para referência ausente.
+    // Existe mas não foi finalizada: não gasta as tentativas reservadas à referência ausente,
+    // mas a espera tem prazo total, para não ficar presa em referências em ciclo.
+    if (tx.hasExceededReferenceWait(now)) return rejeitar(FailureCode.ReferenceNotFound);
     tx.postponeReferenceRetry(now);
     return { transition: 'still-pending', ledgerEntry: undefined };
   }

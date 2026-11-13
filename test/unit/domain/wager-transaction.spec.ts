@@ -347,6 +347,13 @@ describe('WagerTransaction', () => {
       expect(() => criar().postponeReferenceRetry(T0)).toThrow(InvalidTransactionStateError);
     });
 
+    it('o prazo total de espera por referência é de 15 minutos a partir da criação', () => {
+      const tx = reversao(Kind.Refund);
+
+      expect(tx.hasExceededReferenceWait(segundosDepois(T0, 899))).toBe(false);
+      expect(tx.hasExceededReferenceWait(segundosDepois(T0, 900))).toBe(true);
+    });
+
     it('só existe em PENDING_REFERENCE', () => {
       expect(() => criar().registerReferenceRetry(T0)).toThrow(InvalidTransactionStateError);
     });

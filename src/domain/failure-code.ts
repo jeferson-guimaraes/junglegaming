@@ -13,7 +13,7 @@ export enum FailureCode {
   CurrencyMismatch = 'CURRENCY_MISMATCH',
   /** playerId não é o dono da wallet. Corrigir o payload. */
   WalletPlayerMismatch = 'WALLET_PLAYER_MISMATCH',
-  /** A transação referenciada não chegou dentro do prazo. Reenviar a referência e depois esta. */
+  /** A transação referenciada não chegou, ou não foi finalizada, dentro do prazo. Reenviar a referência e depois esta. */
   ReferenceNotFound = 'REFERENCE_NOT_FOUND',
   /** A referência é de outro player, wallet, moeda ou rodada. Corrigir o payload. */
   ReferenceMismatch = 'REFERENCE_MISMATCH',

@@ -27,6 +27,13 @@ export enum WagerTransactionStatus {
 export const REFERENCE_RETRY_POLICY = {
   baseDelaySeconds: 5,
   maxAttempts: 6,
+  /**
+   * Prazo total, desde a criação, para uma transação que espera uma referência que existe mas
+   * ainda não foi finalizada. Essa espera não gasta tentativas; o prazo impede que referências
+   * em ciclo (A espera B, B espera A) fiquem pendentes para sempre. 15 minutos cobrem uma cadeia
+   * de até duas referências pendentes em sequência (cerca de 5 minutos cada).
+   */
+  maxWaitSeconds: 900,
 } as const;
 
 /** Identificador de provedor das transações internas (abertura de wallet). */
@@ -362,6 +369,10 @@ export class WagerTransaction {
 
   hasExhaustedReferenceRetries(): boolean {
     return this._referenceAttempts >= REFERENCE_RETRY_POLICY.maxAttempts;
+  }
+
+  hasExceededReferenceWait(now: Date): boolean {
+    return now.getTime() - this.createdAt.getTime() >= REFERENCE_RETRY_POLICY.maxWaitSeconds * 1000;
   }
 
   isReferenceRetryDue(now: Date): boolean {
