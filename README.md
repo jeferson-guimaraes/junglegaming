@@ -40,6 +40,14 @@ O Compose sobe o PostgreSQL e o MiniStack, roda as migrations uma vez (serviço 
 
 Cada réplica atende a API HTTP, consome a fila de transações, publica os eventos da outbox e reprocessa transações pendentes. Não há balanceador: chame qualquer uma das portas.
 
+Para conferir que subiu:
+
+```bash
+curl -s localhost:3100/health/ready
+```
+
+A resposta esperada é `{"status":"ok","checks":{"postgres":"up","sqs":"up"}}`. A aplicação é só uma API: não há página na raiz (`/` responde 404), e nesta opção nada escuta na porta 3000.
+
 Para derrubar tudo, apagando os dados:
 
 ```bash
@@ -64,7 +72,15 @@ bun run migration:up
 bun run start
 ```
 
-A aplicação sobe em http://localhost:3000. As filas são criadas pela própria aplicação no primeiro uso.
+Nesta opção a aplicação é uma única instância na porta 3000 (configurável por `PORT`). As filas são criadas pela própria aplicação no primeiro uso.
+
+Para conferir que subiu:
+
+```bash
+curl -s localhost:3000/health/ready
+```
+
+Os exemplos deste README usam as portas da opção 1 (`3100` a `3102`); nesta opção, troque por `3000`.
 
 ## Testes
 
