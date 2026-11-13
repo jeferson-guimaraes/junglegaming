@@ -103,7 +103,7 @@ export async function startTestApp(
     async close() {
       await Promise.all(apps.map((app) => app.close()));
       // Invariante final de todo arquivo de teste: wallet.balance == saldo reconstruído pelo ledger.
-      const divergentes = (await walletsDivergentesDoLedger({ sql }).catch(() => [])).filter(
+      const divergentes = (await walletsDivergentesDoLedger({ sql })).filter(
         (wallet) => !adulteradas.has(wallet.id),
       );
       for (const [nome, valor] of anteriores) {

@@ -399,7 +399,7 @@ describe('Worker de referências pendentes', () => {
   });
 
   /** Uma pendente pronta para ser aplicada, e um worker cuja gravação falha com o erro dado. */
-  async function reprocessarComErro(erro: () => Error) {
+  async function reprocessarComErro(erro: () => Error, espera = 5) {
     const wallet = await t.criarWallet('100.00');
     const win = await winPendente(wallet);
     await enviar(transacao(wallet, { externalTransactionId: win.referencia }));
@@ -410,7 +410,7 @@ describe('Worker de referências pendentes', () => {
         .overrideProvider(UnitOfWork)
         .useFactory(faultyUnitOfWorkFactory(1, erro)),
     );
-    clock.avancar(5);
+    clock.avancar(espera);
     const resumo = await comFalha.app.get(ReprocessPendingReferences).runOnce();
     return { wallet, win, resumo };
   }
@@ -462,6 +462,33 @@ describe('Worker de referências pendentes', () => {
       expect((await resumoDaWallet(t, wallet.id)).balance).toBe('115.00');
     },
   );
+
+  it('erro desconhecido que persiste além do prazo de 15 minutos: a pendente termina FAILED em vez de ficar para sempre', async () => {
+    const { wallet, win, resumo } = await reprocessarComErro(
+      () => Object.assign(new Error('erro de programação'), { code: '42703' }),
+      900,
+    );
+
+    expect(resumo).toMatchObject({ falhas: 1, adiadas: 0 });
+    expect(resumo.problemas[0]).toMatchObject({ transactionId: win.id, desfecho: 'falha' });
+    expect(await estado(win.id)).toMatchObject({
+      status: 'FAILED',
+      failure_code: 'INFRASTRUCTURE_FAILURE',
+    });
+    expect((await resumoDaWallet(t, wallet.id)).balance).toBe('75.00');
+  });
+
+  it('falha transitória conhecida além do prazo continua adiada: nunca vira FAILED', async () => {
+    const { win, resumo } = await reprocessarComErro(
+      () => new TransientInfrastructureError('55P03'),
+      900,
+    );
+
+    expect(resumo).toMatchObject({ falhas: 0, adiadas: 1 });
+    expect((await estado(win.id)).status).toBe('PENDING_REFERENCE');
+    await worker.runOnce();
+    expect((await estado(win.id)).status).toBe('PROCESSED');
+  });
 
   it('o ciclo para entre uma pendente e outra quando o encerramento é pedido', async () => {
     const wallets = await Promise.all(Array.from({ length: 3 }, () => t.criarWallet('100.00')));

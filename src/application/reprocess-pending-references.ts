@@ -16,9 +16,9 @@ export interface ReprocessSummary {
   aguardando: number;
   /** Outro worker já tinha cuidado, ou a tentativa ainda não venceu. */
   ignoradas: number;
-  /** Falha transitória ou desconhecida: ficam para o próximo ciclo, sem gastar tentativa. */
+  /** Falha transitória, ou desconhecida ainda dentro do prazo: ficam para o próximo ciclo. */
   adiadas: number;
-  /** Erro reconhecidamente permanente: a transação foi marcada FAILED. */
+  /** Erro permanente, ou desconhecido que persistiu além do prazo: a transação foi marcada FAILED. */
   falhas: number;
   /** O que deu errado em cada pendente adiada ou marcada como falha, para log e alerta. */
   problemas: ReprocessProblem[];
@@ -100,14 +100,22 @@ export class ReprocessPendingReferences {
           desfecho,
           erro: descrever(causa),
         });
-        if (!isPermanentFailure(erro)) {
+        // Falha transitória conhecida (lock, conexão) nunca vira FAILED. Um erro desconhecido é
+        // repetido só até o prazo total de espera: depois dele a pendente termina FAILED, para
+        // não ficar para sempre na frente das outras.
+        const permanente = isPermanentFailure(erro);
+        if (!permanente && erro instanceof TransientInfrastructureError) {
           resumo.adiadas += 1;
           resumo.problemas.push(problema('adiada', erro));
           continue;
         }
-        // Erro permanente: repetir não resolveria. A transação termina FAILED, auditável.
         try {
-          const marcada = await this.marcarFalha(candidata);
+          const marcada = await this.marcarFalha(candidata, { soSeVencida: !permanente });
+          if (marcada === 'no-prazo') {
+            resumo.adiadas += 1;
+            resumo.problemas.push(problema('adiada', erro));
+            continue;
+          }
           if (marcada) resumo.desfechos.push(marcada);
           resumo.falhas += 1;
           resumo.problemas.push(problema('falha', erro));
@@ -146,11 +154,13 @@ export class ReprocessPendingReferences {
 
   private marcarFalha(
     candidata: PendingReferenceCandidate,
-  ): Promise<{ kind: string; status: string } | undefined> {
+    { soSeVencida }: { soSeVencida: boolean },
+  ): Promise<{ kind: string; status: string } | 'no-prazo' | undefined> {
     return this.uow.run(async ({ wallets, transactions }) => {
       await wallets.findByIdForUpdate(candidata.walletId);
       const transaction = await transactions.findByIdForUpdate(candidata.id);
       if (transaction?.status !== WagerTransactionStatus.PendingReference) return undefined;
+      if (soSeVencida && !transaction.hasExceededReferenceWait(this.clock.now())) return 'no-prazo';
       transaction.fail(FailureCode.InfrastructureFailure, this.clock.now());
       await transactions.updatePending(transaction);
       return { kind: transaction.kind, status: transaction.status };

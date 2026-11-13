@@ -37,7 +37,7 @@ export interface Env {
   pendingWorkerEnabled: boolean;
   /** Intervalo entre os ciclos do worker de pendentes. */
   pendingWorkerIntervalMs: number;
-  /** Prazo máximo do encerramento; deve ficar abaixo do tempo de espera do orquestrador (10 s no Docker). */
+  /** Prazo máximo do encerramento; deve ficar abaixo do tempo de espera do orquestrador (15 s no Compose). */
   shutdownTimeoutMs: number;
 }
 
