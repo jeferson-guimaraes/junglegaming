@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'bun:test';
+import { Money } from '@/domain/money';
 import { canonicalJson, computePayloadHash, type PayloadHashFields } from '@/domain/payload-hash';
+import { WagerTransaction, WagerTransactionKind } from '@/domain/wager-transaction';
 
 const base: PayloadHashFields = {
   providerId: 'provider-a',
@@ -98,4 +100,41 @@ describe('computePayloadHash', () => {
     expect(computePayloadHash(comUndefined)).toBe(computePayloadHash(base));
     expect(computePayloadHash(comNull)).toBe(computePayloadHash(base));
   });
+});
+
+describe('Idempotency key com payload divergente', () => {
+  const gravada = WagerTransaction.create({
+    id: 'tx-1',
+    providerId: base.providerId,
+    externalTransactionId: base.externalTransactionId,
+    idempotencyKey: 'provider-a:transaction-123',
+    payloadHash: computePayloadHash(base),
+    walletId: base.walletId,
+    playerId: base.playerId,
+    roundId: base.roundId,
+    gameId: base.gameId,
+    kind: WagerTransactionKind.Bet,
+    money: Money.from(base.money),
+    referenceExternalTransactionId: undefined,
+    createdAt: new Date('2026-11-12T12:00:00.000Z'),
+  });
+
+  it('o mesmo payload, em qualquer forma equivalente, confere com a transação gravada: é replay', () => {
+    const reenviado = { ...base, money: { currency: 'BRL', amount: '25' } };
+
+    expect(gravada.matchesPayload(computePayloadHash(reenviado))).toBe(true);
+  });
+
+  it.each([
+    ['valor', { money: { amount: '25.01', currency: 'BRL' } }],
+    ['tipo', { kind: 'WIN' }],
+    ['rodada', { roundId: 'round-988' }],
+    ['wallet', { walletId: 'outra-wallet' }],
+    ['referência', { referenceExternalTransactionId: 'transaction-100' }],
+  ])(
+    'a mesma key com outro payload (%s) não confere: é conflito, não replay',
+    (_campo, diferenca) => {
+      expect(gravada.matchesPayload(computePayloadHash({ ...base, ...diferenca }))).toBe(false);
+    },
+  );
 });

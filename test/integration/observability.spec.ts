@@ -150,6 +150,7 @@ describe('Logs', () => {
     }
     // Divergência provocada: a reconciliação loga o problema, e esse log também não leva valores.
     await t.sql("update wallets set balance = '1111.11' where id = ?", [wallet.id]);
+    t.divergenciaProvocada(wallet.id);
     await fetch(`${app.baseUrl}/wallets/${wallet.id}/reconciliation`, { method: 'POST' });
 
     const { logs } = await app.stop('SIGTERM');

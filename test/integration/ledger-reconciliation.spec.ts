@@ -203,6 +203,7 @@ describe('POST /wallets/:walletId/reconciliation', () => {
       const wallet = await t.criarWallet('1000.00');
       await apostar(wallet, '25.00');
       await t.sql('update wallets set balance = ? where id = ?', [adulterado, wallet.id]);
+      t.divergenciaProvocada(wallet.id);
       const metricaAntes = await divergencias();
 
       const { status, body } = await reconciliar(wallet.id);

@@ -3,6 +3,7 @@ import type { INestApplication } from '@nestjs/common';
 import { Test, type TestingModuleBuilder } from '@nestjs/testing';
 import { AppModule } from '@/app.module';
 import { createTestDatabase, type TestDatabase } from './database';
+import { walletsDivergentesDoLedger } from './wallet-assertions';
 
 export type Linha = Record<string, unknown>;
 
@@ -18,6 +19,8 @@ export interface TestApp {
     baseUrl: string;
   }>;
   criarWallet(saldo: string, currency?: string): Promise<{ id: string; playerId: string }>;
+  /** Avisa que o teste adulterou o saldo desta wallet de propósito (ex.: reconciliação). */
+  divergenciaProvocada(walletId: string): void;
   postTransacao(
     body: unknown,
     headers?: Record<string, string>,
@@ -60,6 +63,7 @@ export async function startTestApp(
   }
 
   const principal = await subir(configurarPrincipal);
+  const adulteradas = new Set<string>();
   const sql = <T = Linha>(texto: string, params: unknown[] = []) =>
     db.orm.em.getConnection().execute<T[]>(texto, params);
 
@@ -93,13 +97,25 @@ export async function startTestApp(
         body: JSON.stringify(body),
       });
     },
+    divergenciaProvocada(walletId) {
+      adulteradas.add(walletId);
+    },
     async close() {
       await Promise.all(apps.map((app) => app.close()));
+      // Invariante final de todo arquivo de teste: wallet.balance == saldo reconstruído pelo ledger.
+      const divergentes = (await walletsDivergentesDoLedger({ sql }).catch(() => [])).filter(
+        (wallet) => !adulteradas.has(wallet.id),
+      );
       for (const [nome, valor] of anteriores) {
         if (valor === undefined) delete process.env[nome];
         else process.env[nome] = valor;
       }
       await db.drop();
+      if (divergentes.length > 0) {
+        throw new Error(
+          `Invariante violada: saldo diferente do ledger em ${JSON.stringify(divergentes)}`,
+        );
+      }
     },
   };
 }
