@@ -26,5 +26,10 @@ describe('loadEnv', () => {
   it('rejeita valores malformados', () => {
     expect(() => loadEnv({ PORT: 'abc' })).toThrow(/PORT/);
     expect(() => loadEnv({ CONSUMER_ENABLED: 'sim' })).toThrow(/CONSUMER_ENABLED/);
+    expect(() => loadEnv({ PENDING_WORKER_INTERVAL_MS: '0' })).toThrow(
+      /PENDING_WORKER_INTERVAL_MS/,
+    );
+    expect(() => loadEnv({ DB_LOCK_TIMEOUT_MS: '0' })).toThrow(/DB_LOCK_TIMEOUT_MS/);
+    expect(() => loadEnv({ DB_POOL_MAX: '-1' })).toThrow(/DB_POOL_MAX/);
   });
 });

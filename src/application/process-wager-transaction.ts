@@ -15,7 +15,7 @@ import {
   TransientInfrastructureError,
   WalletNotFoundError,
 } from './errors';
-import { ClockPort, IdGenerator, type Repositories, UnitOfWork } from './ports';
+import { ClockPort, IdGenerator, Metrics, type Repositories, UnitOfWork } from './ports';
 
 export interface WagerTransactionCommand {
   idempotencyKey: string;
@@ -58,6 +58,7 @@ export class ProcessWagerTransaction {
     private readonly uow: UnitOfWork,
     private readonly clock: ClockPort,
     private readonly ids: IdGenerator,
+    private readonly metrics: Metrics,
   ) {}
 
   /**
@@ -65,6 +66,39 @@ export class ProcessWagerTransaction {
    * na mesma transação SQL do efeito financeiro, então a reentrega da mensagem não o repete.
    */
   async execute(
+    command: WagerTransactionCommand,
+    inbox?: InboxContext,
+  ): Promise<WagerTransactionResult> {
+    const source = inbox ? 'sqs' : 'http';
+    const inicio = performance.now();
+    try {
+      const resultado = await this.executar(command, inbox);
+      const { kind, status } = resultado.transaction;
+      if (resultado.duplicateMessage) {
+        this.metrics.increment('wager_duplicates_total', { type: 'inbox_duplicate' });
+      } else if (resultado.idempotentReplay) {
+        this.metrics.increment('wager_duplicates_total', { type: 'idempotent_replay' });
+      } else {
+        this.metrics.increment('wager_transactions_total', { kind, status, source });
+      }
+      return resultado;
+    } catch (erro) {
+      if (erro instanceof IdempotencyConflictError) {
+        this.metrics.increment('wager_duplicates_total', { type: 'idempotency_conflict' });
+      } else if (erro instanceof TransientInfrastructureError) {
+        this.metrics.increment('wager_lock_conflicts_total', { reason: erro.reason });
+      }
+      throw erro;
+    } finally {
+      this.metrics.observe(
+        'wager_processing_duration_seconds',
+        (performance.now() - inicio) / 1000,
+        { source },
+      );
+    }
+  }
+
+  private async executar(
     command: WagerTransactionCommand,
     inbox?: InboxContext,
   ): Promise<WagerTransactionResult> {

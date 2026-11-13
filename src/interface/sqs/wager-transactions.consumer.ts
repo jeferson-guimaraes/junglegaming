@@ -18,6 +18,7 @@ import {
   InvalidPayloadError,
   WalletNotFoundError,
 } from '@/application/errors';
+import { Metrics } from '@/application/ports';
 import { ProcessWagerTransaction } from '@/application/process-wager-transaction';
 import { type Env, loadEnv } from '@/infrastructure/config/env';
 import { newCorrelationId, runWithCorrelation } from '@/infrastructure/observability/correlation';
@@ -75,6 +76,7 @@ export class WagerTransactionsConsumer implements OnApplicationBootstrap, OnModu
   constructor(
     private readonly client: SQSClient,
     private readonly processTransaction: ProcessWagerTransaction,
+    private readonly metrics: Metrics,
     @Inject(APP_LOGGER) private readonly logger: AppLogger,
   ) {}
 
@@ -193,6 +195,8 @@ export class WagerTransactionsConsumer implements OnApplicationBootstrap, OnModu
           {
             messageId: pedido.messageId,
             transactionId: resultado.transaction.id,
+            walletId: resultado.transaction.walletId,
+            providerId: resultado.transaction.providerId,
             status: resultado.transaction.status,
             repetida: resultado.duplicateMessage === true,
           },
@@ -223,6 +227,7 @@ export class WagerTransactionsConsumer implements OnApplicationBootstrap, OnModu
           ATRASO_MAXIMO_SEGUNDOS,
         );
         await this.devolver(filas, mensagem, atraso);
+        this.metrics.increment('wager_retries_total', { component: 'consumer' });
         this.logger.warn(
           { messageId: pedido.messageId, recebimentos, atraso, err: (erro as Error)?.name },
           'consumer: falha transitória; mensagem volta à fila',
@@ -270,6 +275,7 @@ export class WagerTransactionsConsumer implements OnApplicationBootstrap, OnModu
       }),
     );
     await this.apagar(filas.queueUrl, mensagem);
+    this.metrics.increment('wager_dlq_messages_total', { reason: motivo });
     this.logger.error(
       { sqsMessageId: mensagem.MessageId, motivo, detalhe: (erro as Error)?.message },
       'consumer: erro permanente; mensagem enviada à DLQ',

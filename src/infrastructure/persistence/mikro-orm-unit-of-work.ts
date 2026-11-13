@@ -11,6 +11,7 @@ import {
 import { type Repositories, UnitOfWork } from '@/application/ports';
 import { InboxMessage } from '@/domain/inbox-message';
 import type { WagerTransaction } from '@/domain/wager-transaction';
+import { type LedgerDirection, WalletLedgerEntry } from '@/domain/wallet-ledger-entry';
 import {
   ledgerEntryToRecord,
   outboxFromRecord,
@@ -27,6 +28,18 @@ import {
   WagerTransactionRecord,
   WalletRecord,
 } from './records';
+
+interface LedgerEntryRow {
+  id: string;
+  wallet_id: string;
+  transaction_id: string;
+  direction: string;
+  amount: string;
+  currency: string;
+  balance_before: string;
+  balance_after: string;
+  created_at: string | Date;
+}
 
 /** Nome da constraint violada, quando o erro é de chave única. */
 function uniqueViolada(erro: unknown): string | undefined {
@@ -196,6 +209,50 @@ function repositories(em: EntityManager): Repositories {
     ledger: {
       async insert(entry) {
         await em.insert(LedgerEntryRecord, ledgerEntryToRecord(entry));
+      },
+      async listByWallet(walletId, afterSeq, limit) {
+        // `seq` é gerado pelo banco e cresce na ordem de gravação: como o ledger é só de
+        // inclusão, paginar por ele nunca repete nem pula lançamentos.
+        const rows = await em.execute<(LedgerEntryRow & { posicao: string })[]>(
+          // O alias não pode se chamar `seq`: o ORDER BY usaria a coluna de saída (texto), e a
+          // ordem viraria alfabética ("10" antes de "9").
+          `select seq::text as posicao, id, wallet_id, transaction_id, direction, amount::text as amount,
+                  currency, balance_before::text as balance_before,
+                  balance_after::text as balance_after, created_at
+             from wallet_ledger_entries
+            where wallet_id = ? and seq > ?
+            order by seq
+            limit ?`,
+          [walletId, afterSeq ?? '0', limit],
+        );
+        return rows.map((row) => ({
+          seq: row.posicao,
+          entry: WalletLedgerEntry.rehydrate({
+            id: row.id,
+            walletId: row.wallet_id,
+            transactionId: row.transaction_id,
+            direction: row.direction as LedgerDirection,
+            amount: row.amount,
+            currency: row.currency,
+            balanceBefore: row.balance_before,
+            balanceAfter: row.balance_after,
+            createdAt: new Date(row.created_at),
+          }),
+        }));
+      },
+      async totalsByWallet(walletId) {
+        const [row] = await em.execute<{ credits: string; debits: string; entries: string }[]>(
+          `select coalesce(sum(amount) filter (where direction = 'CREDIT'), 0)::numeric(19,2)::text as credits,
+                  coalesce(sum(amount) filter (where direction = 'DEBIT'), 0)::numeric(19,2)::text as debits,
+                  count(*)::text as entries
+             from wallet_ledger_entries where wallet_id = ?`,
+          [walletId],
+        );
+        return {
+          credits: row?.credits ?? '0.00',
+          debits: row?.debits ?? '0.00',
+          entries: Number(row?.entries ?? 0),
+        };
       },
     },
     outbox: {

@@ -3,6 +3,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'bun:test';
 import type { INestApplication } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import { HealthController } from '@/interface/http/health/health.controller';
+import { Dependencies } from '@/interface/http/observability/dependencies';
 
 describe('GET /health/live', () => {
   let app: INestApplication;
@@ -11,6 +12,8 @@ describe('GET /health/live', () => {
   beforeAll(async () => {
     const moduleRef = await Test.createTestingModule({
       controllers: [HealthController],
+      // A liveness não consulta dependências; um substituto vazio basta.
+      providers: [{ provide: Dependencies, useValue: {} }],
     }).compile();
     app = moduleRef.createNestApplication({ logger: false });
     await app.listen(0);

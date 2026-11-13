@@ -90,3 +90,12 @@ export class InboxPayloadMismatchError extends ApplicationError {
     super(`Mensagem ${messageId} reenviada com conteúdo diferente`);
   }
 }
+
+/** Uma dependência (banco ou broker) não respondeu à verificação de prontidão. */
+export class NotReadyError extends ApplicationError {
+  readonly code = 'NOT_READY';
+
+  constructor(readonly checks: Record<string, 'up' | 'down'>) {
+    super('Dependência indisponível');
+  }
+}

@@ -4,6 +4,7 @@ import {
   type OnApplicationBootstrap,
   type OnModuleDestroy,
 } from '@nestjs/common';
+import { Metrics } from '@/application/ports';
 import { ReprocessPendingReferences } from '@/application/reprocess-pending-references';
 import { loadEnv } from '../config/env';
 import { APP_LOGGER, type AppLogger } from '../observability/logger';
@@ -20,6 +21,7 @@ export class PendingReferenceWorker implements OnApplicationBootstrap, OnModuleD
 
   constructor(
     private readonly reprocess: ReprocessPendingReferences,
+    private readonly metrics: Metrics,
     @Inject(APP_LOGGER) private readonly logger: AppLogger,
   ) {
     this.tarefa = new PeriodicTask('pending-references', () => this.ciclo(), logger);
@@ -39,6 +41,10 @@ export class PendingReferenceWorker implements OnApplicationBootstrap, OnModuleD
   private async ciclo(): Promise<void> {
     const resumo = await this.reprocess.runOnce(() => this.parando);
     const { problemas, ...contagem } = resumo;
+    const repetidas = resumo.aguardando + resumo.adiadas;
+    if (repetidas > 0) {
+      this.metrics.increment('wager_retries_total', { component: 'pending_reference' }, repetidas);
+    }
     if (Object.values(contagem).some((n) => n > 0)) {
       this.logger.info(contagem, 'ciclo do worker de pendentes');
     }
