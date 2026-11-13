@@ -3,9 +3,11 @@ import { loadEnv } from './infrastructure/config/env';
 import { ShutdownHookLogger } from './infrastructure/lifecycle/shutdown-hook.logger';
 import { correlationMiddleware } from './infrastructure/observability/correlation';
 import { APP_LOGGER, createLogger } from './infrastructure/observability/logger';
+import { DatabaseModule } from './infrastructure/persistence/database.module';
 import { HealthController } from './interface/http/health/health.controller';
 
 @Module({
+  imports: [DatabaseModule],
   controllers: [HealthController],
   providers: [
     { provide: APP_LOGGER, useFactory: () => createLogger({ level: loadEnv().logLevel }) },
