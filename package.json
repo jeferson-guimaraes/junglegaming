@@ -1,0 +1,43 @@
+{
+  "name": "wagering-processor",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "bun run src/main.ts",
+    "dev": "bun --watch run src/main.ts",
+    "typecheck": "tsc --noEmit",
+    "lint": "biome check .",
+    "format": "biome check --write .",
+    "test": "bun test",
+    "test:int": "bun test --timeout 30000 ./test/integration",
+    "test:conc": "bun test --timeout 60000 ./test/concurrency",
+    "infra:up": "docker compose up -d --wait postgres ministack",
+    "infra:down": "docker compose down -v",
+    "stack:up": "docker compose up -d --build --wait",
+    "stack:down": "docker compose down -v",
+    "migration:up": "bun run scripts/migrate.ts up",
+    "migration:down": "bun run scripts/migrate.ts down",
+    "queues:setup": "bun run scripts/setup-queues.ts"
+  },
+  "dependencies": {
+    "@aws-sdk/client-sqs": "^3.1167.0",
+    "@mikro-orm/core": "^7.2.9",
+    "@mikro-orm/migrations": "^7.2.9",
+    "@mikro-orm/postgresql": "^7.2.9",
+    "@nestjs/common": "^12.5.0",
+    "@nestjs/core": "^12.5.0",
+    "@nestjs/platform-express": "^12.5.0",
+    "decimal.js": "^10.6.0",
+    "pino": "^10.4.0",
+    "reflect-metadata": "^0.2.2",
+    "rxjs": "^7.8.2"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^2.6.7",
+    "@nestjs/testing": "^12.5.0",
+    "@types/bun": "^1.4.4",
+    "@types/express": "^5.0.6",
+    "typescript": "^7.0.2"
+  }
+}

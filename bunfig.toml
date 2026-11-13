@@ -1,0 +1,3 @@
+[test]
+# `bun test` sem argumentos roda só a suíte de unidade, que não precisa de infraestrutura.
+root = "./test/unit"

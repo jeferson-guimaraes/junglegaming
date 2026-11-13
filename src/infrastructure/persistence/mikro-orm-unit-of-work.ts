@@ -1,0 +1,333 @@
+import { LockMode, UniqueConstraintViolationException } from '@mikro-orm/core';
+import { type EntityManager, MikroORM } from '@mikro-orm/postgresql';
+import { Injectable } from '@nestjs/common';
+import {
+  ConcurrentUpdateError,
+  DuplicateInboxMessageError,
+  DuplicateTransactionError,
+  TransientInfrastructureError,
+  WalletAlreadyExistsError,
+} from '@/application/errors';
+import { type Repositories, UnitOfWork } from '@/application/ports';
+import { InboxMessage } from '@/domain/inbox-message';
+import type { WagerTransaction } from '@/domain/wager-transaction';
+import { type LedgerDirection, WalletLedgerEntry } from '@/domain/wallet-ledger-entry';
+import {
+  ledgerEntryToRecord,
+  outboxFromRecord,
+  outboxToRecord,
+  transactionFromRecord,
+  transactionToRecord,
+  walletFromRecord,
+  walletToRecord,
+} from './mappers';
+import {
+  InboxRecord,
+  LedgerEntryRecord,
+  OutboxRecord,
+  WagerTransactionRecord,
+  WalletRecord,
+} from './records';
+
+interface LedgerEntryRow {
+  id: string;
+  wallet_id: string;
+  transaction_id: string;
+  direction: string;
+  amount: string;
+  currency: string;
+  balance_before: string;
+  balance_after: string;
+  created_at: string | Date;
+}
+
+/** Nome da constraint violada, quando o erro é de chave única. */
+function uniqueViolada(erro: unknown): string | undefined {
+  if (!(erro instanceof UniqueConstraintViolationException)) return undefined;
+  return (erro as { constraint?: string }).constraint;
+}
+
+/**
+ * Códigos que indicam falha transitória: nada foi gravado e vale tentar de novo. A
+ * classificação é pelo código do PostgreSQL ou do socket, porque o MikroORM não converte
+ * todos em exceções próprias (lock_timeout chega como DriverException genérica e banco fora
+ * chega como Error puro).
+ */
+const TRANSITORIOS = new Set([
+  '55P03', // lock_not_available (lock_timeout)
+  '40P01', // deadlock_detected
+  '40001', // serialization_failure
+  '57014', // query_canceled (statement_timeout)
+  '57P01', // admin_shutdown
+  '57P02', // crash_shutdown
+  '57P03', // cannot_connect_now
+  '53300', // too_many_connections
+  'ECONNREFUSED',
+  'ECONNRESET',
+  'ETIMEDOUT',
+  'EPIPE',
+]);
+
+export function isTransient(erro: unknown): boolean {
+  const code = (erro as { code?: unknown } | null)?.code;
+  if (typeof code !== 'string') return false;
+  return TRANSITORIOS.has(code) || code.startsWith('08'); // 08xxx: exceções de conexão
+}
+
+/**
+ * Índice único da reversão única. Sob o lock da wallet a regra de domínio rejeita antes;
+ * se mesmo assim o banco barrar, nada foi gravado e a operação é tratada como transitória.
+ */
+const REVERSAO_UNICA = 'wager_transactions_single_reversal';
+
+async function umaTransacao(
+  em: EntityManager,
+  where: Partial<WagerTransactionRecord>,
+): Promise<WagerTransaction | undefined> {
+  const record = await em.findOne(WagerTransactionRecord, where);
+  return record ? transactionFromRecord(record) : undefined;
+}
+
+/**
+ * Repositórios presos ao EntityManager de uma transação. Cada escrita é um comando SQL
+ * imediato (sem unit of work do ORM), então a ordem dos comandos é a ordem do código.
+ */
+function repositories(em: EntityManager): Repositories {
+  return {
+    wallets: {
+      async insert(wallet) {
+        try {
+          await em.insert(WalletRecord, walletToRecord(wallet));
+        } catch (erro) {
+          if (uniqueViolada(erro) === 'wallets_player_currency_unique') {
+            throw new WalletAlreadyExistsError(wallet.playerId, wallet.currency);
+          }
+          throw erro;
+        }
+      },
+      async findById(id) {
+        const record = await em.findOne(WalletRecord, { id });
+        return record ? walletFromRecord(record) : undefined;
+      },
+      async findByIdForUpdate(id) {
+        const record = await em.findOne(
+          WalletRecord,
+          { id },
+          { lockMode: LockMode.PESSIMISTIC_WRITE },
+        );
+        return record ? walletFromRecord(record) : undefined;
+      },
+      async update(wallet, expectedVersion) {
+        const alteradas = await em.nativeUpdate(
+          WalletRecord,
+          { id: wallet.id, version: expectedVersion },
+          {
+            balance: wallet.balance.toJSON().amount,
+            version: wallet.version,
+            updatedAt: wallet.updatedAt,
+          },
+        );
+        if (alteradas !== 1) throw new ConcurrentUpdateError(wallet.id);
+      },
+    },
+    transactions: {
+      async insert(transaction) {
+        try {
+          await em.insert(WagerTransactionRecord, transactionToRecord(transaction));
+        } catch (erro) {
+          const constraint = uniqueViolada(erro);
+          if (
+            constraint === 'wager_transactions_idempotency_key_unique' ||
+            constraint === 'wager_transactions_provider_external_unique'
+          ) {
+            throw new DuplicateTransactionError(constraint);
+          }
+          if (constraint === REVERSAO_UNICA) throw new ConcurrentUpdateError(transaction.walletId);
+          throw erro;
+        }
+      },
+      async updatePending(transaction) {
+        const { id: _id, ...campos } = transactionToRecord(transaction);
+        let alteradas: number;
+        try {
+          alteradas = await em.nativeUpdate(
+            WagerTransactionRecord,
+            { id: transaction.id, status: 'PENDING_REFERENCE' },
+            {
+              status: campos.status,
+              failureCode: campos.failureCode,
+              referenceTransactionId: campos.referenceTransactionId,
+              observedBalance: campos.observedBalance,
+              observedBalanceCurrency: campos.observedBalanceCurrency,
+              processedAt: campos.processedAt,
+              referenceAttempts: campos.referenceAttempts,
+              nextReferenceAttemptAt: campos.nextReferenceAttemptAt,
+            },
+          );
+        } catch (erro) {
+          if (uniqueViolada(erro) === REVERSAO_UNICA) {
+            throw new ConcurrentUpdateError(transaction.walletId);
+          }
+          throw erro;
+        }
+        if (alteradas !== 1) throw new ConcurrentUpdateError(transaction.walletId);
+      },
+      async findById(id) {
+        return umaTransacao(em, { id });
+      },
+      async findByIdForUpdate(id) {
+        const record = await em.findOne(
+          WagerTransactionRecord,
+          { id },
+          { lockMode: LockMode.PESSIMISTIC_WRITE },
+        );
+        return record ? transactionFromRecord(record) : undefined;
+      },
+      async findDuePendingReferences(now, limit) {
+        const records = await em.find(
+          WagerTransactionRecord,
+          { status: 'PENDING_REFERENCE', nextReferenceAttemptAt: { $lte: now } },
+          { orderBy: { nextReferenceAttemptAt: 'asc' }, limit, fields: ['id', 'walletId'] },
+        );
+        return records.map((record) => ({ id: record.id, walletId: record.walletId }));
+      },
+      async findByIdempotencyKey(idempotencyKey) {
+        return umaTransacao(em, { idempotencyKey });
+      },
+      async findByExternalId(providerId, externalTransactionId) {
+        return umaTransacao(em, { providerId, externalTransactionId });
+      },
+      async hasProcessedReversal(transactionId) {
+        const quantidade = await em.count(WagerTransactionRecord, {
+          referenceTransactionId: transactionId,
+          status: 'PROCESSED',
+          kind: { $in: ['REFUND', 'ROLLBACK'] },
+        });
+        return quantidade > 0;
+      },
+    },
+    ledger: {
+      async insert(entry) {
+        await em.insert(LedgerEntryRecord, ledgerEntryToRecord(entry));
+      },
+      async listByWallet(walletId, afterSeq, limit) {
+        // `seq` é gerado pelo banco e cresce na ordem de gravação: como o ledger é só de
+        // inclusão, paginar por ele nunca repete nem pula lançamentos.
+        const rows = await em.execute<(LedgerEntryRow & { posicao: string })[]>(
+          // O alias não pode se chamar `seq`: o ORDER BY usaria a coluna de saída (texto), e a
+          // ordem viraria alfabética ("10" antes de "9").
+          `select seq::text as posicao, id, wallet_id, transaction_id, direction, amount::text as amount,
+                  currency, balance_before::text as balance_before,
+                  balance_after::text as balance_after, created_at
+             from wallet_ledger_entries
+            where wallet_id = ? and seq > ?
+            order by seq
+            limit ?`,
+          [walletId, afterSeq ?? '0', limit],
+        );
+        return rows.map((row) => ({
+          seq: row.posicao,
+          entry: WalletLedgerEntry.rehydrate({
+            id: row.id,
+            walletId: row.wallet_id,
+            transactionId: row.transaction_id,
+            direction: row.direction as LedgerDirection,
+            amount: row.amount,
+            currency: row.currency,
+            balanceBefore: row.balance_before,
+            balanceAfter: row.balance_after,
+            createdAt: new Date(row.created_at),
+          }),
+        }));
+      },
+      async totalsByWallet(walletId) {
+        const [row] = await em.execute<{ credits: string; debits: string; entries: string }[]>(
+          `select coalesce(sum(amount) filter (where direction = 'CREDIT'), 0)::numeric(19,2)::text as credits,
+                  coalesce(sum(amount) filter (where direction = 'DEBIT'), 0)::numeric(19,2)::text as debits,
+                  count(*)::text as entries
+             from wallet_ledger_entries where wallet_id = ?`,
+          [walletId],
+        );
+        return {
+          credits: row?.credits ?? '0.00',
+          debits: row?.debits ?? '0.00',
+          entries: Number(row?.entries ?? 0),
+        };
+      },
+    },
+    outbox: {
+      async insert(message) {
+        await em.insert(OutboxRecord, outboxToRecord(message));
+      },
+      async lockDueBatch(now, limit) {
+        const records = await em.find(
+          OutboxRecord,
+          { publishedAt: null, nextAttemptAt: { $lte: now } },
+          {
+            // O id (UUID v7) desempata eventos da mesma operação, que têm a mesma data.
+            orderBy: { attempts: 'asc', occurredAt: 'asc', id: 'asc' },
+            limit,
+            lockMode: LockMode.PESSIMISTIC_PARTIAL_WRITE, // FOR UPDATE SKIP LOCKED
+          },
+        );
+        return records.map(outboxFromRecord);
+      },
+      async update(message) {
+        await em.nativeUpdate(
+          OutboxRecord,
+          { id: message.id },
+          {
+            attempts: message.attempts,
+            nextAttemptAt: message.nextAttemptAt ?? null,
+            publishedAt: message.publishedAt ?? null,
+          },
+        );
+      },
+    },
+    inbox: {
+      async find(consumerName, messageId) {
+        const record = await em.findOne(InboxRecord, { consumerName, messageId });
+        return record
+          ? InboxMessage.rehydrate({ ...record, processedAt: record.processedAt ?? undefined })
+          : undefined;
+      },
+      async insert(message) {
+        try {
+          await em.insert(InboxRecord, {
+            consumerName: message.consumerName,
+            messageId: message.messageId,
+            payloadHash: message.payloadHash,
+            receivedAt: message.receivedAt,
+            processedAt: message.processedAt ?? null,
+          });
+        } catch (erro) {
+          if (uniqueViolada(erro) === 'inbox_messages_pkey') {
+            throw new DuplicateInboxMessageError(message.messageId);
+          }
+          throw erro;
+        }
+      },
+    },
+  };
+}
+
+@Injectable()
+export class MikroOrmUnitOfWork extends UnitOfWork {
+  constructor(private readonly orm: MikroORM) {
+    super();
+  }
+
+  async run<T>(work: (repositories: Repositories) => Promise<T>): Promise<T> {
+    // EntityManager novo a cada chamada: nenhum estado em memória passa de uma operação a outra.
+    return this.orm.em
+      .fork()
+      .transactional((em) => work(repositories(em)))
+      .catch((erro: unknown) => {
+        if (erro instanceof TransientInfrastructureError) throw erro;
+        if (isTransient(erro)) {
+          throw new TransientInfrastructureError(String((erro as { code: string }).code));
+        }
+        throw erro;
+      });
+  }
+}
