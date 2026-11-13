@@ -86,6 +86,10 @@ export class ErrorFilter implements ExceptionFilter {
       response.setHeader('Retry-After', String(RETRY_AFTER_SEGUNDOS));
     }
     if (conhecido) {
+      // Recusas (4xx) ficam registradas com o código, sem dados do corpo da requisição.
+      if (conhecido.status < 500) {
+        this.logger.info({ code: conhecido.code, status: conhecido.status }, 'requisição recusada');
+      }
       response.status(conhecido.status).json({ code: conhecido.code, message: conhecido.message });
       return;
     }

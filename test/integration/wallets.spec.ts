@@ -7,6 +7,7 @@ import { AppModule } from '@/app.module';
 import { UnitOfWork } from '@/application/ports';
 import { createTestDatabase, type TestDatabase } from '../support/database';
 import { type FaultyUnitOfWork, faultyUnitOfWorkFactory } from '../support/faulty-unit-of-work';
+import { walletsDivergentesDoLedger } from '../support/wallet-assertions';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
@@ -17,10 +18,18 @@ const anteriores = new Map<string, string | undefined>();
 
 beforeAll(async () => {
   db = await createTestDatabase();
-  for (const nome of ['DATABASE_URL', 'DB_LOCK_TIMEOUT_MS'])
+  // Só a API: sem consumer, publisher e worker, o teste não toca as filas reais.
+  const variaveis = {
+    DATABASE_URL: db.url,
+    DB_LOCK_TIMEOUT_MS: '300',
+    CONSUMER_ENABLED: 'false',
+    OUTBOX_PUBLISHER_ENABLED: 'false',
+    PENDING_WORKER_ENABLED: 'false',
+  };
+  for (const [nome, valor] of Object.entries(variaveis)) {
     anteriores.set(nome, process.env[nome]);
-  process.env.DATABASE_URL = db.url;
-  process.env.DB_LOCK_TIMEOUT_MS = '300';
+    process.env[nome] = valor;
+  }
 
   const moduleRef = await Test.createTestingModule({ imports: [AppModule] }).compile();
   app = moduleRef.createNestApplication({ logger: false });
@@ -30,6 +39,8 @@ beforeAll(async () => {
 
 afterAll(async () => {
   await app?.close();
+  // Invariante final: wallet.balance == saldo reconstruído pelo ledger.
+  expect(await walletsDivergentesDoLedger({ sql })).toEqual([]);
   for (const [nome, valor] of anteriores) {
     if (valor === undefined) delete process.env[nome];
     else process.env[nome] = valor;

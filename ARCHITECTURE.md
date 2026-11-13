@@ -28,9 +28,9 @@ HTTP e SQS chegam ao **mesmo caso de uso** (`ProcessWagerTransaction`). Todo efe
 | Camada | Conteúdo | Depende de |
 |---|---|---|
 | `domain` | `Money`, `Wallet`, `WagerTransaction`, `WalletLedgerEntry`, regras de cada operação, eventos, inbox, outbox | só `decimal.js` e `node:crypto` |
-| `application` | casos de uso e portas (`UnitOfWork`, repositórios, `ClockPort`, `IdGenerator`, `EventPublisher`, `Metrics`) | `domain` |
+| `application` | casos de uso e portas (`UnitOfWork`, repositórios, `ClockPort`, `IdGenerator`, `EventPublisher`, `Metrics`) | `domain`; do NestJS, só o decorator `@Injectable` |
 | `infrastructure` | MikroORM (schemas, mapeadores, migrations), SQS, workers, logs, métricas | `application`, `domain` |
-| `interface` | controllers HTTP, consumer SQS, validação de entrada | `application` |
+| `interface` | controllers HTTP, consumer SQS, validação de entrada | `application`; de `infrastructure`, só o que é da borda: configuração, logger, registro de métricas, cliente SQS e a conexão usada pelo health check |
 
 Um teste (`test/unit/domain/domain-purity.spec.ts`) falha se o domínio importar NestJS, ORM ou qualquer outra biblioteca.
 
@@ -153,7 +153,7 @@ Uma transação cuja referência ainda não chegou é gravada como `PENDING_REFE
 - **Referência existente, mas ainda não finalizada** (por exemplo, `ROLLBACK` de um `REFUND` que espera a `BET`): a transação aguarda **sem gastar tentativas**, para que a cadeia inteira termine processada quando a primeira peça chegar. Essa espera tem prazo total de **15 minutos** desde a criação; sem ele, duas transações que se referenciam em ciclo ficariam pendentes para sempre.
 - **Referência finalizada:** aplica ou rejeita na hora, com o código correspondente.
 
-O worker lê as candidatas vencidas sem lock, trava wallet e transação e **revalida** o estado: se outra instância já tratou a pendente, ele ignora. Erro transitório não gasta tentativa.
+O worker lê as candidatas vencidas sem lock, trava wallet e transação e **revalida** o estado: se outra instância já tratou a pendente, ele ignora. Erro transitório (lock, conexão) não gasta tentativa e nunca encerra a transação. Um erro desconhecido é repetido até o mesmo prazo de 15 minutos; se persistir, a transação termina `FAILED`, para não ficar pendente para sempre nem atrasar as demais.
 
 ## 10. Entradas: HTTP e SQS
 
@@ -288,8 +288,10 @@ Pontos em que o enunciado é ambíguo ou silencioso, e o que foi adotado.
 | 12 | Mesmo provedor e id externo sob outra idempotency key | Conflito 409 |
 | 13 | Ordem dos eventos publicados | Não garantida entre publishers concorrentes; quem consome usa `walletVersion` e `eventId` |
 | 14 | Crédito que estoura o valor máximo | Rejeição de negócio (`BALANCE_LIMIT_EXCEEDED`) |
-| 15 | Quando uma transação vira `FAILED` | Só por erro permanente ao reprocessar uma pendente; não gera evento de integração (o enunciado não define um) |
+| 15 | Quando uma transação vira `FAILED` | Só ao reprocessar uma pendente: por erro permanente, ou por erro desconhecido que persiste além do prazo de espera; não gera evento de integração (o enunciado não define um) |
 | 16 | Destino dos eventos | Fila `wager-events.fifo` no mesmo SQS; nenhum consumidor foi escrito |
+| 17 | "Mesma resposta" no replay | O replay devolve o **estado atual** da transação: uma que respondeu 202 passa a responder 201 (ou 422) depois de resolvida pelo worker. O resultado de uma transação finalizada nunca muda |
+| 18 | Formato de `playerId` e `walletId` | UUID, como nos exemplos do enunciado; outro formato é payload inválido |
 
 ## 17. Decisões e trade-offs
 
