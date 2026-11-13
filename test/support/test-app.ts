@@ -33,7 +33,13 @@ export async function startTestApp(
 ): Promise<TestApp> {
   const db = await createTestDatabase();
   // Os workers ficam desligados: cada teste dispara os ciclos na hora que quiser.
-  const variaveis = { DATABASE_URL: db.url, PENDING_WORKER_ENABLED: 'false', ...env };
+  const variaveis = {
+    DATABASE_URL: db.url,
+    PENDING_WORKER_ENABLED: 'false',
+    OUTBOX_PUBLISHER_ENABLED: 'false',
+    CONSUMER_ENABLED: 'false',
+    ...env,
+  };
   const anteriores = new Map<string, string | undefined>();
   for (const [nome, valor] of Object.entries(variaveis)) {
     anteriores.set(nome, process.env[nome]);

@@ -1,5 +1,5 @@
 import type { FailureCode } from '@/domain/failure-code';
-import type { OutboxMessage } from '@/domain/outbox-message';
+import { OutboxMessage } from '@/domain/outbox-message';
 import {
   WagerTransaction,
   type WagerTransactionKind,
@@ -122,5 +122,18 @@ export function transactionFromRecord(record: WagerTransactionRecord): WagerTran
     processedAt: record.processedAt ?? undefined,
     referenceAttempts: record.referenceAttempts,
     nextReferenceAttemptAt: record.nextReferenceAttemptAt ?? undefined,
+  });
+}
+
+export function outboxFromRecord(record: OutboxRecord): OutboxMessage {
+  return OutboxMessage.rehydrate({
+    id: record.id,
+    aggregateId: record.aggregateId,
+    eventType: record.eventType,
+    payload: record.payload,
+    occurredAt: record.occurredAt,
+    attempts: record.attempts,
+    nextAttemptAt: record.nextAttemptAt ?? undefined,
+    publishedAt: record.publishedAt ?? undefined,
   });
 }

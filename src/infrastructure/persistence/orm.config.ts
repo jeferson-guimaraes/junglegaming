@@ -2,7 +2,13 @@ import type { Constructor, EntitySchema } from '@mikro-orm/core';
 import { type Migration, Migrator } from '@mikro-orm/migrations';
 import { defineConfig, type Options } from '@mikro-orm/postgresql';
 import { migrations } from './migrations';
-import { LedgerEntrySchema, OutboxSchema, WagerTransactionSchema, WalletSchema } from './records';
+import {
+  InboxSchema,
+  LedgerEntrySchema,
+  OutboxSchema,
+  WagerTransactionSchema,
+  WalletSchema,
+} from './records';
 
 /** Schemas de persistência da aplicação. */
 // biome-ignore lint/suspicious/noExplicitAny: lista heterogênea de schemas
@@ -11,6 +17,7 @@ export const entities: EntitySchema<any>[] = [
   WagerTransactionSchema,
   LedgerEntrySchema,
   OutboxSchema,
+  InboxSchema,
 ];
 
 interface OrmConfigInput {

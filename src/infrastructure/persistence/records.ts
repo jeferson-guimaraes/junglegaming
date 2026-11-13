@@ -136,3 +136,23 @@ export const OutboxSchema = new EntitySchema<OutboxRecord>({
     publishedAt: { type: 'Date', nullable: true },
   },
 });
+
+export class InboxRecord {
+  consumerName!: string;
+  messageId!: string;
+  payloadHash!: string;
+  receivedAt!: Date;
+  processedAt!: Date | null;
+}
+
+export const InboxSchema = new EntitySchema<InboxRecord>({
+  class: InboxRecord,
+  tableName: 'inbox_messages',
+  properties: {
+    consumerName: { type: 'text', primary: true },
+    messageId: { type: 'text', primary: true },
+    payloadHash: { type: 'text' },
+    receivedAt: { type: 'Date' },
+    processedAt: { type: 'Date', nullable: true },
+  },
+});

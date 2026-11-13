@@ -1,3 +1,5 @@
+import { QUEUES, WAGER_TRANSACTIONS_MAX_RECEIVE_COUNT } from '../sqs/queue-names';
+
 export interface Env {
   port: number;
   databaseUrl: string;
@@ -10,6 +12,27 @@ export interface Env {
   awsAccessKeyId: string;
   awsSecretAccessKey: string;
   logLevel: string;
+  /** Fila FIFO de entrada das transações e a DLQ dela. */
+  transactionsQueueName: string;
+  transactionsDlqName: string;
+  /** Liga o consumer da fila de transações. */
+  consumerEnabled: boolean;
+  /** Tempo, em segundos, que uma mensagem recebida fica invisível para os outros consumers. */
+  consumerVisibilityTimeoutSeconds: number;
+  /** Long polling do recebimento, em segundos. */
+  consumerWaitTimeSeconds: number;
+  /** Base, em segundos, do intervalo crescente antes de reentregar após falha transitória. */
+  consumerRetryBaseSeconds: number;
+  /** Recebimentos de uma mensagem antes de o broker movê-la para a DLQ. */
+  consumerMaxReceiveCount: number;
+  /** Só para teste de falha: encerra o processo depois do commit e antes do ack. */
+  faultExitBeforeAck: boolean;
+  /** Fila FIFO que recebe os eventos de integração. */
+  eventsQueueName: string;
+  /** Liga o publisher do outbox. */
+  outboxPublisherEnabled: boolean;
+  /** Intervalo entre os ciclos do publisher do outbox. */
+  outboxPublisherIntervalMs: number;
   /** Liga o worker que reprocessa transações à espera de referência. */
   pendingWorkerEnabled: boolean;
   /** Intervalo entre os ciclos do worker de pendentes. */
@@ -46,6 +69,41 @@ export function loadEnv(source: Record<string, string | undefined> = process.env
     awsAccessKeyId: source.AWS_ACCESS_KEY_ID ?? 'test',
     awsSecretAccessKey: source.AWS_SECRET_ACCESS_KEY ?? 'test',
     logLevel: source.LOG_LEVEL ?? 'info',
+    transactionsQueueName: source.SQS_TRANSACTIONS_QUEUE ?? QUEUES.wagerTransactions,
+    transactionsDlqName: source.SQS_TRANSACTIONS_DLQ ?? QUEUES.wagerTransactionsDlq,
+    consumerEnabled: booleano('CONSUMER_ENABLED', source.CONSUMER_ENABLED, true),
+    consumerVisibilityTimeoutSeconds: inteiro(
+      'CONSUMER_VISIBILITY_TIMEOUT_SECONDS',
+      source.CONSUMER_VISIBILITY_TIMEOUT_SECONDS,
+      30,
+    ),
+    consumerWaitTimeSeconds: inteiro(
+      'CONSUMER_WAIT_TIME_SECONDS',
+      source.CONSUMER_WAIT_TIME_SECONDS,
+      2,
+    ),
+    consumerRetryBaseSeconds: inteiro(
+      'CONSUMER_RETRY_BASE_SECONDS',
+      source.CONSUMER_RETRY_BASE_SECONDS,
+      2,
+    ),
+    consumerMaxReceiveCount: inteiro(
+      'CONSUMER_MAX_RECEIVE_COUNT',
+      source.CONSUMER_MAX_RECEIVE_COUNT,
+      WAGER_TRANSACTIONS_MAX_RECEIVE_COUNT,
+    ),
+    faultExitBeforeAck: booleano('FAULT_EXIT_BEFORE_ACK', source.FAULT_EXIT_BEFORE_ACK, false),
+    eventsQueueName: source.SQS_EVENTS_QUEUE ?? QUEUES.wagerEvents,
+    outboxPublisherEnabled: booleano(
+      'OUTBOX_PUBLISHER_ENABLED',
+      source.OUTBOX_PUBLISHER_ENABLED,
+      true,
+    ),
+    outboxPublisherIntervalMs: inteiro(
+      'OUTBOX_PUBLISHER_INTERVAL_MS',
+      source.OUTBOX_PUBLISHER_INTERVAL_MS,
+      500,
+    ),
     pendingWorkerEnabled: booleano('PENDING_WORKER_ENABLED', source.PENDING_WORKER_ENABLED, true),
     pendingWorkerIntervalMs: inteiro(
       'PENDING_WORKER_INTERVAL_MS',

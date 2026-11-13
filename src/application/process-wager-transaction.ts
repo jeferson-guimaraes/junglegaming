@@ -1,12 +1,15 @@
 import { Injectable } from '@nestjs/common';
 import { InvalidMoneyError, InvalidTransactionError } from '@/domain/errors';
+import { InboxMessage } from '@/domain/inbox-message';
 import type { Money } from '@/domain/money';
 import { computePayloadHash } from '@/domain/payload-hash';
 import { WagerTransaction, type WagerTransactionKind } from '@/domain/wager-transaction';
 import { applyAndPersist } from './apply-and-persist';
 import {
+  DuplicateInboxMessageError,
   DuplicateTransactionError,
   IdempotencyConflictError,
+  InboxPayloadMismatchError,
   InvalidPayloadError,
   TransactionNotFoundError,
   TransientInfrastructureError,
@@ -30,10 +33,18 @@ export interface WagerTransactionCommand {
   causationId?: string | undefined;
 }
 
+/** Identificação da mensagem de fila que originou o pedido, para a deduplicação por inbox. */
+export interface InboxContext {
+  consumerName: string;
+  messageId: string;
+}
+
 export interface WagerTransactionResult {
   transaction: WagerTransaction;
   /** A transação já existia com o mesmo payload: nada foi aplicado de novo. */
   idempotentReplay: boolean;
+  /** A mensagem de fila já tinha sido processada (inbox): nada foi feito desta vez. */
+  duplicateMessage?: boolean;
 }
 
 /**
@@ -49,7 +60,14 @@ export class ProcessWagerTransaction {
     private readonly ids: IdGenerator,
   ) {}
 
-  async execute(command: WagerTransactionCommand): Promise<WagerTransactionResult> {
+  /**
+   * `inbox` vem preenchido quando a entrada é uma mensagem de fila: o registro de inbox entra
+   * na mesma transação SQL do efeito financeiro, então a reentrega da mensagem não o repete.
+   */
+  async execute(
+    command: WagerTransactionCommand,
+    inbox?: InboxContext,
+  ): Promise<WagerTransactionResult> {
     const payloadHash = hashDo(command);
     const id = this.ids.next();
     // Validação de contrato antes de abrir a transação SQL: payload inválido não toca o banco.
@@ -57,9 +75,15 @@ export class ProcessWagerTransaction {
 
     try {
       return await this.uow.run((repositories) =>
-        this.aplicar(repositories, command, id, payloadHash),
+        this.aplicar(repositories, command, id, payloadHash, inbox),
       );
     } catch (erro) {
+      if (erro instanceof DuplicateInboxMessageError && inbox) {
+        // Duas entregas da mesma mensagem ao mesmo tempo: a outra registrou o inbox primeiro.
+        return this.uow.run((repositories) =>
+          this.mensagemRepetida(repositories, command, payloadHash, inbox),
+        );
+      }
       if (!(erro instanceof DuplicateTransactionError)) throw erro;
       // Corrida da mesma key (ou do mesmo par provider/external) em wallets diferentes: o lock
       // da wallet não as serializa e quem perdeu bateu na chave única. A transação SQL já foi
@@ -77,8 +101,20 @@ export class ProcessWagerTransaction {
     command: WagerTransactionCommand,
     id: string,
     payloadHash: string,
+    inbox: InboxContext | undefined,
   ): Promise<WagerTransactionResult> {
     const { wallets, transactions } = repositories;
+    if (inbox) {
+      const registrada = await repositories.inbox.find(inbox.consumerName, inbox.messageId);
+      if (registrada) {
+        return this.mensagemRepetida(repositories, command, payloadHash, inbox, registrada);
+      }
+      const now = this.clock.now();
+      const mensagem = InboxMessage.receive({ ...inbox, payloadHash, receivedAt: now });
+      mensagem.markProcessed(now); // vale junto com o commit desta transação
+      await repositories.inbox.insert(mensagem);
+    }
+
     const wallet = await wallets.findByIdForUpdate(command.walletId);
     if (!wallet) throw new WalletNotFoundError(command.walletId);
     // O relógio é lido depois do lock: as datas seguem a ordem real de aplicação na wallet.
@@ -98,6 +134,27 @@ export class ProcessWagerTransaction {
       ids: this.ids,
     });
     return { transaction: nova, idempotentReplay: false };
+  }
+
+  /** A mensagem já foi processada: devolve o resultado gravado, sem aplicar nada. */
+  private async mensagemRepetida(
+    { inbox: inboxRepository, transactions }: Repositories,
+    command: WagerTransactionCommand,
+    payloadHash: string,
+    inbox: InboxContext,
+    registrada?: InboxMessage,
+  ): Promise<WagerTransactionResult> {
+    const mensagem =
+      registrada ?? (await inboxRepository.find(inbox.consumerName, inbox.messageId));
+    if (!mensagem) {
+      throw new TransientInfrastructureError('inbox duplicado não encontrado na releitura');
+    }
+    if (mensagem.payloadHash !== payloadHash) throw new InboxPayloadMismatchError(inbox.messageId);
+    const transaction = await transactions.findByIdempotencyKey(command.idempotencyKey);
+    if (!transaction) {
+      throw new TransientInfrastructureError('transação da mensagem repetida não encontrada');
+    }
+    return { transaction, idempotentReplay: true, duplicateMessage: true };
   }
 }
 

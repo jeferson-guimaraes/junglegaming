@@ -5,6 +5,7 @@ import {
   GetWagerTransaction,
   ProcessWagerTransaction,
 } from './application/process-wager-transaction';
+import { PublishOutbox } from './application/publish-outbox';
 import { ReprocessPendingReferences } from './application/reprocess-pending-references';
 import { GetWallet, OpenWallet } from './application/wallets.use-cases';
 import { loadEnv } from './infrastructure/config/env';
@@ -12,16 +13,19 @@ import { ShutdownHookLogger } from './infrastructure/lifecycle/shutdown-hook.log
 import { correlationMiddleware } from './infrastructure/observability/correlation';
 import { APP_LOGGER, createLogger } from './infrastructure/observability/logger';
 import { DatabaseModule } from './infrastructure/persistence/database.module';
+import { SqsModule } from './infrastructure/sqs/sqs.module';
 import { SystemClock, UuidV7Generator } from './infrastructure/system-adapters';
+import { OutboxPublisherWorker } from './infrastructure/workers/outbox-publisher.worker';
 import { PendingReferenceWorker } from './infrastructure/workers/pending-reference.worker';
 import { AuthGuard } from './interface/http/auth.guard';
 import { ErrorFilter } from './interface/http/error.filter';
 import { HealthController } from './interface/http/health/health.controller';
 import { TransactionsController } from './interface/http/wagering/transactions.controller';
 import { WalletsController } from './interface/http/wallets/wallets.controller';
+import { WagerTransactionsConsumer } from './interface/sqs/wager-transactions.consumer';
 
 @Module({
-  imports: [DatabaseModule],
+  imports: [DatabaseModule, SqsModule],
   controllers: [HealthController, WalletsController, TransactionsController],
   providers: [
     { provide: APP_LOGGER, useFactory: () => createLogger({ level: loadEnv().logLevel }) },
@@ -35,6 +39,9 @@ import { WalletsController } from './interface/http/wallets/wallets.controller';
     GetWagerTransaction,
     ReprocessPendingReferences,
     PendingReferenceWorker,
+    PublishOutbox,
+    OutboxPublisherWorker,
+    WagerTransactionsConsumer,
     ShutdownHookLogger,
   ],
 })

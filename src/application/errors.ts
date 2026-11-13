@@ -72,3 +72,21 @@ export class ConcurrentUpdateError extends TransientInfrastructureError {
     super(`versão da wallet ${walletId} mudou`);
   }
 }
+
+/** O registro de inbox bateu na chave: outra transação registrou a mesma mensagem antes. */
+export class DuplicateInboxMessageError extends ApplicationError {
+  readonly code = 'DUPLICATE_INBOX_MESSAGE';
+
+  constructor(messageId: string) {
+    super(`Mensagem ${messageId} já registrada`);
+  }
+}
+
+/** O mesmo messageId chegou de novo com outro conteúdo. Erro permanente: a mensagem vai para a DLQ. */
+export class InboxPayloadMismatchError extends ApplicationError {
+  readonly code = 'INBOX_PAYLOAD_MISMATCH';
+
+  constructor(messageId: string) {
+    super(`Mensagem ${messageId} reenviada com conteúdo diferente`);
+  }
+}
