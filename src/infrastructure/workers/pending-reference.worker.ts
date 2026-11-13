@@ -6,53 +6,48 @@ import {
 } from '@nestjs/common';
 import { ReprocessPendingReferences } from '@/application/reprocess-pending-references';
 import { loadEnv } from '../config/env';
-import { newCorrelationId, runWithCorrelation } from '../observability/correlation';
 import { APP_LOGGER, type AppLogger } from '../observability/logger';
+import { PeriodicTask } from './periodic-task';
 
 /**
- * Agenda os ciclos do reprocessamento de pendentes. Um ciclo nunca se sobrepõe a outro na
- * mesma instância; entre instâncias, quem coordena é o lock da wallet no banco.
+ * Agenda os ciclos do reprocessamento de pendentes. Toda instância roda o seu; quem coordena
+ * entre instâncias é o lock da wallet no banco.
  */
 @Injectable()
 export class PendingReferenceWorker implements OnApplicationBootstrap, OnModuleDestroy {
-  private timer: ReturnType<typeof setInterval> | undefined;
-  private emAndamento: Promise<void> | undefined;
+  private readonly tarefa: PeriodicTask;
+  private parando = false;
 
   constructor(
     private readonly reprocess: ReprocessPendingReferences,
     @Inject(APP_LOGGER) private readonly logger: AppLogger,
-  ) {}
+  ) {
+    this.tarefa = new PeriodicTask('pending-references', () => this.ciclo(), logger);
+  }
 
   onApplicationBootstrap(): void {
     const env = loadEnv();
-    if (!env.pendingWorkerEnabled) return;
-    this.timer = setInterval(() => this.tick(), env.pendingWorkerIntervalMs);
+    if (env.pendingWorkerEnabled) this.tarefa.start(env.pendingWorkerIntervalMs);
   }
 
-  /** Para de agendar e espera o ciclo em andamento terminar, antes de o pool do banco fechar. */
+  /** Para de agendar e espera a pendente em andamento terminar, antes de o pool do banco fechar. */
   async onModuleDestroy(): Promise<void> {
-    clearInterval(this.timer);
-    this.timer = undefined;
-    await this.emAndamento;
-  }
-
-  private tick(): void {
-    if (this.emAndamento) return;
-    this.emAndamento = runWithCorrelation(newCorrelationId(), () => this.ciclo()).finally(() => {
-      this.emAndamento = undefined;
-    });
+    this.parando = true;
+    await this.tarefa.stop();
   }
 
   private async ciclo(): Promise<void> {
-    try {
-      const resumo = await this.reprocess.runOnce();
-      const total = Object.values(resumo).reduce((soma, n) => soma + n, 0);
-      if (total > 0) this.logger.info(resumo, 'ciclo do worker de pendentes');
-      if (resumo.falhas > 0) {
-        this.logger.error({ falhas: resumo.falhas }, 'pendentes marcadas como FAILED');
+    const resumo = await this.reprocess.runOnce(() => this.parando);
+    const { problemas, ...contagem } = resumo;
+    if (Object.values(contagem).some((n) => n > 0)) {
+      this.logger.info(contagem, 'ciclo do worker de pendentes');
+    }
+    for (const problema of problemas) {
+      if (problema.desfecho === 'falha') {
+        this.logger.error(problema, 'pendente marcada como FAILED');
+      } else {
+        this.logger.warn(problema, 'pendente adiada para o próximo ciclo');
       }
-    } catch (err) {
-      this.logger.warn({ err: (err as Error).name }, 'ciclo do worker de pendentes falhou');
     }
   }
 }

@@ -19,6 +19,7 @@ export class FaultyUnitOfWork extends UnitOfWork {
   constructor(
     private readonly real: UnitOfWork,
     private readonly falharNaGravacao: number,
+    private readonly erro: () => Error = () => new FalhaInjetada(),
   ) {
     super();
   }
@@ -33,7 +34,7 @@ export class FaultyUnitOfWork extends UnitOfWork {
           insert: async (message) => {
             gravacoes += 1;
             this.tentativasNoOutbox += 1;
-            if (gravacoes === this.falharNaGravacao) throw new FalhaInjetada();
+            if (gravacoes === this.falharNaGravacao) throw this.erro();
             await repositories.outbox.insert(message);
           },
         },
@@ -43,9 +44,10 @@ export class FaultyUnitOfWork extends UnitOfWork {
 }
 
 /** Provider para `overrideProvider(UnitOfWork).useFactory(...)`. */
-export function faultyUnitOfWorkFactory(falharNaGravacao: number) {
+export function faultyUnitOfWorkFactory(falharNaGravacao: number, erro?: () => Error) {
   return {
-    factory: (orm: MikroORM) => new FaultyUnitOfWork(new MikroOrmUnitOfWork(orm), falharNaGravacao),
+    factory: (orm: MikroORM) =>
+      new FaultyUnitOfWork(new MikroOrmUnitOfWork(orm), falharNaGravacao, erro),
     inject: [MikroORM],
   };
 }

@@ -1,10 +1,12 @@
 import 'reflect-metadata';
 import { afterAll, beforeAll, describe, expect, it } from 'bun:test';
 import { randomUUID } from 'node:crypto';
+import { TransientInfrastructureError } from '@/application/errors';
 import { ClockPort, UnitOfWork } from '@/application/ports';
 import { ReprocessPendingReferences } from '@/application/reprocess-pending-references';
 import { FakeClock } from '../support/fake-clock';
 import { faultyUnitOfWorkFactory } from '../support/faulty-unit-of-work';
+import { esperar } from '../support/sqs';
 import { chave, type Linha, startTestApp, type TestApp, transacao } from '../support/test-app';
 import { cadeiaDoLedger, type ResultadoHttp, resumoDaWallet } from '../support/wallet-assertions';
 
@@ -13,7 +15,7 @@ let t: TestApp;
 let worker: ReprocessPendingReferences;
 
 beforeAll(async () => {
-  t = await startTestApp({ DB_LOCK_TIMEOUT_MS: '500' }, (b) =>
+  t = await startTestApp({ DB_LOCK_TIMEOUT_MS: '2000' }, (b) =>
     b.overrideProvider(ClockPort).useValue(clock),
   );
   worker = t.app.get(ReprocessPendingReferences);
@@ -184,7 +186,7 @@ describe('Worker de referências pendentes', () => {
     expect((await resumoDaWallet(t, wallet.id)).balance).toBe('10.00');
   });
 
-  it('cadeia em que a BET nunca chega: o REFUND esgota o prazo e o ROLLBACK, que só esperava, é rejeitado em seguida', async () => {
+  it('cadeia em que a BET nunca chega: o REFUND esgota as tentativas e o ROLLBACK, que só esperava, é rejeitado em seguida', async () => {
     const wallet = await t.criarWallet('100.00');
     const refund = transacao(wallet, {
       kind: 'REFUND',
@@ -199,8 +201,8 @@ describe('Worker de referências pendentes', () => {
     expect([r1.status, r2.status]).toEqual([202, 202]);
 
     // Enquanto o REFUND existe e aguarda, o ROLLBACK só reagenda: não gasta tentativas (I18).
-    for (let i = 0; i < 5; i++) {
-      clock.avancar(1000);
+    for (const espera of [5, 10, 20, 40, 80]) {
+      clock.avancar(espera);
       await worker.runOnce();
     }
     expect(await estado(r2.body.transactionId)).toMatchObject({
@@ -212,10 +214,10 @@ describe('Worker de referências pendentes', () => {
       reference_attempts: 0,
     });
 
-    for (let i = 0; i < 3; i++) {
-      clock.avancar(1000);
-      await worker.runOnce();
-    }
+    clock.avancar(160);
+    await worker.runOnce();
+    clock.avancar(10);
+    await worker.runOnce();
     expect(await estado(r2.body.transactionId)).toMatchObject({
       status: 'REJECTED',
       failure_code: 'REFERENCE_NOT_FOUND',
@@ -225,6 +227,41 @@ describe('Worker de referências pendentes', () => {
       failure_code: 'REFERENCE_NOT_PROCESSED',
       reference_attempts: 0,
     });
+    expect((await resumoDaWallet(t, wallet.id)).balance).toBe('100.00');
+  });
+
+  it('referências em ciclo (A espera B, B espera A) não ficam pendentes para sempre: são rejeitadas ao fim do prazo de 15 minutos', async () => {
+    const wallet = await t.criarWallet('100.00');
+    const a = transacao(wallet, { kind: 'ROLLBACK', referenceExternalTransactionId: 'x' });
+    const b = transacao(wallet, {
+      kind: 'ROLLBACK',
+      referenceExternalTransactionId: a.externalTransactionId,
+    });
+    a.referenceExternalTransactionId = b.externalTransactionId;
+    const ra = await enviar(a);
+    const rb = await enviar(b);
+    expect([ra.status, rb.status]).toEqual([202, 202]);
+
+    for (let i = 0; i < 14; i++) {
+      clock.avancar(60);
+      await worker.runOnce();
+    }
+    expect((await estado(ra.body.transactionId)).status).toBe('PENDING_REFERENCE');
+    expect((await estado(rb.body.transactionId)).status).toBe('PENDING_REFERENCE');
+
+    clock.avancar(60);
+    await worker.runOnce();
+    clock.avancar(60);
+    await worker.runOnce();
+
+    for (const id of [ra.body.transactionId, rb.body.transactionId]) {
+      expect((await estado(id)).status).toBe('REJECTED');
+      expect(await tiposDeEvento(id)).toEqual([
+        'WagerTransactionPendingReference',
+        'WagerTransactionRejected',
+      ]);
+    }
+    expect((await estado(ra.body.transactionId)).failure_code).toBe('REFERENCE_NOT_FOUND');
     expect((await resumoDaWallet(t, wallet.id)).balance).toBe('100.00');
   });
 
@@ -264,49 +301,73 @@ describe('Worker de referências pendentes', () => {
     expect(cadeia).toMatchObject({ consistente: true, saldoFinal: '75.00' });
   });
 
-  it('dois workers ao mesmo tempo não processam a mesma pendente duas vezes', async () => {
-    const wallets = await Promise.all(Array.from({ length: 10 }, () => t.criarWallet('100.00')));
-    const pendentes = await Promise.all(wallets.map((wallet) => winPendente(wallet)));
-    await Promise.all(
-      pendentes.map((p, i) =>
-        enviar(transacao(wallets[i] as Wallet, { externalTransactionId: p.referencia })),
-      ),
-    );
+  /**
+   * Força a corrida: segura o lock da wallet até os dois workers estarem parados esperando por
+   * ele, e só então solta. Sem isso, um terminaria antes de o outro começar.
+   */
+  async function doisWorkersDisputando(walletId: string) {
     const outraInstancia = await t.variante((b) => b.overrideProvider(ClockPort).useValue(clock));
     const outroWorker = outraInstancia.app.get(ReprocessPendingReferences);
-
-    clock.avancar(5);
-    await Promise.all([
-      worker.runOnce(),
-      outroWorker.runOnce(),
-      worker.runOnce(),
-      outroWorker.runOnce(),
-    ]);
-
-    for (const [i, pendente] of pendentes.entries()) {
-      expect((await estado(pendente.id)).status).toBe('PROCESSED');
-      expect(await resumoDaWallet(t, (wallets[i] as Wallet).id)).toMatchObject({
-        balance: '115.00',
-        version: 3,
-        creditos: 2,
-      });
-      expect(await tiposDeEvento(pendente.id)).toEqual([
-        'WagerTransactionPendingReference',
-        'WagerTransactionProcessed',
-        'WalletBalanceChanged',
-      ]);
+    const dono = t.db.orm.em.fork();
+    await dono.begin();
+    try {
+      await dono
+        .getConnection()
+        .execute(
+          'select id from wallets where id = ? for update',
+          [walletId],
+          'all',
+          dono.getTransactionContext(),
+        );
+      const execucoes = [worker.runOnce(), outroWorker.runOnce()];
+      await esperar(
+        async () =>
+          (await t.contar(
+            'pg_stat_activity',
+            "datname = current_database() and wait_event_type = 'Lock'",
+          )) === 2,
+        1500,
+        'os dois workers esperando o lock da wallet',
+      );
+      await dono.rollback();
+      return await Promise.all(execucoes);
+    } finally {
+      if (dono.isInTransaction()) await dono.rollback();
     }
-  });
+  }
 
-  it('dois workers ao mesmo tempo contam uma única tentativa quando a referência não chegou', async () => {
+  it('dois workers disputando a mesma pendente: só um aplica, o outro percebe e ignora', async () => {
     const wallet = await t.criarWallet('100.00');
     const win = await winPendente(wallet);
-    const outraInstancia = await t.variante((b) => b.overrideProvider(ClockPort).useValue(clock));
-    const outroWorker = outraInstancia.app.get(ReprocessPendingReferences);
-
+    await enviar(transacao(wallet, { externalTransactionId: win.referencia }));
     clock.avancar(5);
-    await Promise.all([worker.runOnce(), outroWorker.runOnce()]);
 
+    const resumos = await doisWorkersDisputando(wallet.id);
+
+    expect(resumos.map((r) => r.concluidas).sort()).toEqual([0, 1]);
+    expect(resumos.map((r) => r.ignoradas).sort()).toEqual([0, 1]);
+    expect((await estado(win.id)).status).toBe('PROCESSED');
+    expect(await resumoDaWallet(t, wallet.id)).toMatchObject({
+      balance: '115.00',
+      version: 3,
+      creditos: 2,
+    });
+    expect(await tiposDeEvento(win.id)).toEqual([
+      'WagerTransactionPendingReference',
+      'WagerTransactionProcessed',
+      'WalletBalanceChanged',
+    ]);
+  });
+
+  it('dois workers disputando uma pendente sem referência: uma única tentativa é contada', async () => {
+    const wallet = await t.criarWallet('100.00');
+    const win = await winPendente(wallet);
+    clock.avancar(5);
+
+    const resumos = await doisWorkersDisputando(wallet.id);
+
+    expect(resumos.map((r) => r.aguardando).sort()).toEqual([0, 1]);
+    expect(resumos.map((r) => r.ignoradas).sort()).toEqual([0, 1]);
     expect((await estado(win.id)).reference_attempts).toBe(1);
   });
 
@@ -337,7 +398,8 @@ describe('Worker de referências pendentes', () => {
     });
   });
 
-  it('erro inesperado e permanente no reprocessamento: a transação termina FAILED, auditável, sem mover saldo', async () => {
+  /** Uma pendente pronta para ser aplicada, e um worker cuja gravação falha com o erro dado. */
+  async function reprocessarComErro(erro: () => Error) {
     const wallet = await t.criarWallet('100.00');
     const win = await winPendente(wallet);
     await enviar(transacao(wallet, { externalTransactionId: win.referencia }));
@@ -346,12 +408,22 @@ describe('Worker de referências pendentes', () => {
         .overrideProvider(ClockPort)
         .useValue(clock)
         .overrideProvider(UnitOfWork)
-        .useFactory(faultyUnitOfWorkFactory(1)),
+        .useFactory(faultyUnitOfWorkFactory(1, erro)),
+    );
+    clock.avancar(5);
+    const resumo = await comFalha.app.get(ReprocessPendingReferences).runOnce();
+    return { wallet, win, resumo };
+  }
+
+  it('erro permanente no reprocessamento (violação de constraint): a transação termina FAILED, auditável, sem mover saldo', async () => {
+    const { wallet, win, resumo } = await reprocessarComErro(() =>
+      Object.assign(new Error('violação de check'), { code: '23514' }),
     );
 
-    clock.avancar(5);
-    await comFalha.app.get(ReprocessPendingReferences).runOnce();
-
+    expect(resumo).toMatchObject({ falhas: 1, adiadas: 0 });
+    expect(resumo.problemas).toEqual([
+      { transactionId: win.id, walletId: wallet.id, desfecho: 'falha', erro: 'Error (23514)' },
+    ]);
     expect(await estado(win.id)).toMatchObject({
       status: 'FAILED',
       failure_code: 'INFRASTRUCTURE_FAILURE',
@@ -366,5 +438,40 @@ describe('Worker de referências pendentes', () => {
       failureCode: 'INFRASTRUCTURE_FAILURE',
       idempotentReplay: true,
     });
+  });
+
+  it.each([
+    ['falha transitória conhecida', () => new TransientInfrastructureError('55P03')],
+    ['erro sem código (ex.: conexão caiu)', () => new Error('Connection terminated unexpectedly')],
+    ['erro de conexão do driver', () => Object.assign(new Error('reset'), { code: 'ECONNRESET' })],
+  ])(
+    '%s não vira FAILED: a pendente é adiada e aplicada no ciclo seguinte',
+    async (_caso, erro) => {
+      const { wallet, win, resumo } = await reprocessarComErro(erro);
+
+      expect(resumo).toMatchObject({ falhas: 0, adiadas: 1 });
+      expect(resumo.problemas[0]).toMatchObject({ transactionId: win.id, desfecho: 'adiada' });
+      expect(await estado(win.id)).toMatchObject({
+        status: 'PENDING_REFERENCE',
+        reference_attempts: 0,
+      });
+
+      await worker.runOnce();
+
+      expect((await estado(win.id)).status).toBe('PROCESSED');
+      expect((await resumoDaWallet(t, wallet.id)).balance).toBe('115.00');
+    },
+  );
+
+  it('o ciclo para entre uma pendente e outra quando o encerramento é pedido', async () => {
+    const wallets = await Promise.all(Array.from({ length: 3 }, () => t.criarWallet('100.00')));
+    await Promise.all(wallets.map((wallet) => winPendente(wallet)));
+    clock.avancar(5);
+    let consultas = 0;
+
+    const { problemas: _problemas, ...contagem } = await worker.runOnce(() => ++consultas > 1);
+
+    // Havia pelo menos 3 pendentes vencidas; só a primeira foi tratada antes da parada.
+    expect(Object.values(contagem).reduce((soma, n) => soma + n, 0)).toBe(1);
   });
 });

@@ -494,6 +494,28 @@ describe('Regras de transação', () => {
       expect(t.nextReferenceAttemptAt).toEqual(new Date(T1.getTime() + 5000));
     });
 
+    it('a espera por uma referência não finalizada tem prazo: passados 15 minutos, é rejeitada', () => {
+      const w = wallet('100.00');
+      // Dois ROLLBACKs que se referenciam: nenhum dos dois jamais será finalizado pelo outro.
+      const a = tx(Kind.Rollback, {
+        externalTransactionId: 'ext-a',
+        referenceExternalTransactionId: 'ext-b',
+      });
+      const b = tx(Kind.Rollback, {
+        externalTransactionId: 'ext-b',
+        referenceExternalTransactionId: 'ext-a',
+      });
+      aplicar(w, a, { now: T0 });
+      aplicar(w, b, { reference: a, now: T0 });
+      const minutos = (n: number) => new Date(T0.getTime() + n * 60_000);
+
+      expect(aplicar(w, a, { reference: b, now: minutos(14) }).transition).toBe('still-pending');
+      const outcome = aplicar(w, a, { reference: b, now: minutos(15) });
+
+      esperarRejeicao(w, a, outcome, FailureCode.ReferenceNotFound);
+      expect(w.balance.toJSON().amount).toBe('100.00');
+    });
+
     it('só a referência ausente consome tentativas', () => {
       const w = wallet('100.00');
       const refundPendente = tx(Kind.Refund, {

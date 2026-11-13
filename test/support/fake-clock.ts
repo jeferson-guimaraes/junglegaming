@@ -13,6 +13,10 @@ export class FakeClock extends ClockPort {
     return new Date(this.atual);
   }
 
+  definir(instante: Date): void {
+    this.atual = new Date(instante);
+  }
+
   avancar(segundos: number): void {
     this.atual = new Date(this.atual.getTime() + segundos * 1000);
   }
