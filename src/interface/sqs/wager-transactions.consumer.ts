@@ -18,6 +18,7 @@ import {
   InvalidPayloadError,
   WalletNotFoundError,
 } from '@/application/errors';
+import { Metrics } from '@/application/ports';
 import { ProcessWagerTransaction } from '@/application/process-wager-transaction';
 import { type Env, loadEnv } from '@/infrastructure/config/env';
 import { newCorrelationId, runWithCorrelation } from '@/infrastructure/observability/correlation';
@@ -75,6 +76,7 @@ export class WagerTransactionsConsumer implements OnApplicationBootstrap, OnModu
   constructor(
     private readonly client: SQSClient,
     private readonly processTransaction: ProcessWagerTransaction,
+    private readonly metrics: Metrics,
     @Inject(APP_LOGGER) private readonly logger: AppLogger,
   ) {}
 
@@ -176,14 +178,17 @@ export class WagerTransactionsConsumer implements OnApplicationBootstrap, OnModu
       return true;
     }
 
-    return runWithCorrelation(newCorrelationId(), async () => {
+    // Uma correlação por mensagem: a mesma nos logs e nos eventos gerados.
+    const correlationId = newCorrelationId();
+    const ids = {
+      messageId: pedido.messageId,
+      walletId: pedido.input.walletId,
+      providerId: pedido.input.providerId,
+    };
+    return runWithCorrelation(correlationId, async () => {
       try {
         const resultado = await this.processTransaction.execute(
-          {
-            ...pedido.input,
-            correlationId: newCorrelationId(),
-            causationId: pedido.messageId,
-          },
+          { ...pedido.input, correlationId, causationId: pedido.messageId },
           { consumerName: CONSUMER_NAME, messageId: pedido.messageId },
         );
         // Ponto de falha injetável (só em teste): o processo morre depois do commit, sem ack.
@@ -191,7 +196,7 @@ export class WagerTransactionsConsumer implements OnApplicationBootstrap, OnModu
         await this.apagar(filas.queueUrl, mensagem);
         this.logger.info(
           {
-            messageId: pedido.messageId,
+            ...ids,
             transactionId: resultado.transaction.id,
             status: resultado.transaction.status,
             repetida: resultado.duplicateMessage === true,
@@ -204,7 +209,7 @@ export class WagerTransactionsConsumer implements OnApplicationBootstrap, OnModu
           // Erro de negócio: reentregar não muda o resultado.
           await this.apagar(filas.queueUrl, mensagem);
           this.logger.warn(
-            { messageId: pedido.messageId, code: erro.code },
+            { ...ids, code: erro.code },
             'consumer: conflito de idempotência; mensagem descartada',
           );
           return true;
@@ -214,7 +219,7 @@ export class WagerTransactionsConsumer implements OnApplicationBootstrap, OnModu
           erro instanceof WalletNotFoundError ||
           erro instanceof InboxPayloadMismatchError
         ) {
-          await this.enviarParaDlq(filas, mensagem, erro.code, erro);
+          await this.enviarParaDlq(filas, mensagem, erro.code, erro, ids);
           return true;
         }
         const recebimentos = Number(mensagem.Attributes?.ApproximateReceiveCount ?? '1');
@@ -223,8 +228,9 @@ export class WagerTransactionsConsumer implements OnApplicationBootstrap, OnModu
           ATRASO_MAXIMO_SEGUNDOS,
         );
         await this.devolver(filas, mensagem, atraso);
+        this.metrics.increment('wager_retries_total', { component: 'consumer' });
         this.logger.warn(
-          { messageId: pedido.messageId, recebimentos, atraso, err: (erro as Error)?.name },
+          { ...ids, recebimentos, atraso, err: (erro as Error)?.name },
           'consumer: falha transitória; mensagem volta à fila',
         );
         return false;
@@ -257,6 +263,7 @@ export class WagerTransactionsConsumer implements OnApplicationBootstrap, OnModu
     mensagem: Message,
     motivo: string,
     erro: unknown,
+    ids: Record<string, string> = {},
   ): Promise<void> {
     await this.client.send(
       new SendMessageCommand({
@@ -270,8 +277,9 @@ export class WagerTransactionsConsumer implements OnApplicationBootstrap, OnModu
       }),
     );
     await this.apagar(filas.queueUrl, mensagem);
+    this.metrics.increment('wager_dlq_messages_total', { reason: motivo });
     this.logger.error(
-      { sqsMessageId: mensagem.MessageId, motivo, detalhe: (erro as Error)?.message },
+      { ...ids, sqsMessageId: mensagem.MessageId, motivo, detalhe: (erro as Error)?.message },
       'consumer: erro permanente; mensagem enviada à DLQ',
     );
   }

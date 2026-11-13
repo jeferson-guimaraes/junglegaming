@@ -54,8 +54,28 @@ export interface WagerTransactionRepository {
   hasProcessedReversal(transactionId: string): Promise<boolean>;
 }
 
+export interface LedgerPageItem {
+  /** Posição do lançamento na ordem de gravação; é a base do cursor. */
+  seq: string;
+  entry: WalletLedgerEntry;
+}
+
+export interface LedgerTotals {
+  credits: string;
+  debits: string;
+  entries: number;
+}
+
 export interface LedgerRepository {
   insert(entry: WalletLedgerEntry): Promise<void>;
+  /** Lançamentos da wallet depois de `afterSeq`, em ordem de gravação. */
+  listByWallet(
+    walletId: string,
+    afterSeq: string | undefined,
+    limit: number,
+  ): Promise<LedgerPageItem[]>;
+  /** Soma de créditos e de débitos da wallet, calculada pelo banco em NUMERIC. */
+  totalsByWallet(walletId: string): Promise<LedgerTotals>;
 }
 
 export interface OutboxRepository {
@@ -97,4 +117,13 @@ export interface Repositories {
  */
 export abstract class UnitOfWork {
   abstract run<T>(work: (repositories: Repositories) => Promise<T>): Promise<T>;
+}
+
+export type MetricLabels = Record<string, string>;
+
+/** Métricas da aplicação. Os nomes aceitos e o significado de cada um ficam na implementação. */
+export abstract class Metrics {
+  abstract increment(name: string, labels?: MetricLabels, value?: number): void;
+  /** Registra uma duração, em segundos, em um histograma. */
+  abstract observe(name: string, seconds: number, labels?: MetricLabels): void;
 }

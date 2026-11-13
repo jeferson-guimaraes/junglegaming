@@ -10,6 +10,7 @@ import {
   ApplicationError,
   IdempotencyConflictError,
   InvalidPayloadError,
+  NotReadyError,
   TransactionNotFoundError,
   TransientInfrastructureError,
   WalletAlreadyExistsError,
@@ -76,6 +77,10 @@ export class ErrorFilter implements ExceptionFilter {
   catch(erro: unknown, host: ArgumentsHost): void {
     const response = host.switchToHttp().getResponse<Response>();
     const conhecido = traduzir(erro);
+    if (erro instanceof NotReadyError) {
+      response.status(503).json({ status: 'unavailable', checks: erro.checks });
+      return;
+    }
     if (erro instanceof TransientInfrastructureError) {
       this.logger.warn({ motivo: erro.reason }, 'falha transitória de infraestrutura');
       response.setHeader('Retry-After', String(RETRY_AFTER_SEGUNDOS));

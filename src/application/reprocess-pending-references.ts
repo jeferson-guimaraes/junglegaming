@@ -22,6 +22,8 @@ export interface ReprocessSummary {
   falhas: number;
   /** O que deu errado em cada pendente adiada ou marcada como falha, para log e alerta. */
   problemas: ReprocessProblem[];
+  /** Tipo e status final de cada pendente que saiu de PENDING_REFERENCE, para métrica. */
+  desfechos: { kind: string; status: string }[];
 }
 
 export interface ReprocessProblem {
@@ -50,7 +52,7 @@ function descrever(erro: unknown): string {
   return typeof code === 'string' ? `${nome} (${code})` : nome;
 }
 
-type Desfecho = 'concluida' | 'aguardando' | 'ignorada';
+type Desfecho = 'aguardando' | 'ignorada' | { kind: string; status: string };
 
 /**
  * Reprocessa transações PENDING_REFERENCE cuja nova tentativa venceu. Cada pendente é tratada
@@ -75,6 +77,7 @@ export class ReprocessPendingReferences {
       adiadas: 0,
       falhas: 0,
       problemas: [],
+      desfechos: [],
     };
     const candidatas = await this.uow.run(({ transactions }) =>
       transactions.findDuePendingReferences(this.clock.now(), LOTE),
@@ -84,9 +87,12 @@ export class ReprocessPendingReferences {
       if (deveParar()) break;
       try {
         const desfecho = await this.reprocessar(candidata);
-        if (desfecho === 'concluida') resumo.concluidas += 1;
-        else if (desfecho === 'aguardando') resumo.aguardando += 1;
-        else resumo.ignoradas += 1;
+        if (desfecho === 'aguardando') resumo.aguardando += 1;
+        else if (desfecho === 'ignorada') resumo.ignoradas += 1;
+        else {
+          resumo.concluidas += 1;
+          resumo.desfechos.push(desfecho);
+        }
       } catch (erro) {
         const problema = (desfecho: 'adiada' | 'falha', causa: unknown): ReprocessProblem => ({
           transactionId: candidata.id,
@@ -101,7 +107,8 @@ export class ReprocessPendingReferences {
         }
         // Erro permanente: repetir não resolveria. A transação termina FAILED, auditável.
         try {
-          await this.marcarFalha(candidata);
+          const marcada = await this.marcarFalha(candidata);
+          if (marcada) resumo.desfechos.push(marcada);
           resumo.falhas += 1;
           resumo.problemas.push(problema('falha', erro));
         } catch (erroAoMarcar) {
@@ -131,17 +138,22 @@ export class ReprocessPendingReferences {
         now,
         ids: this.ids,
       });
-      return outcome.transition === 'still-pending' ? 'aguardando' : 'concluida';
+      return outcome.transition === 'still-pending'
+        ? 'aguardando'
+        : { kind: transaction.kind, status: transaction.status };
     });
   }
 
-  private async marcarFalha(candidata: PendingReferenceCandidate): Promise<void> {
-    await this.uow.run(async ({ wallets, transactions }) => {
+  private marcarFalha(
+    candidata: PendingReferenceCandidate,
+  ): Promise<{ kind: string; status: string } | undefined> {
+    return this.uow.run(async ({ wallets, transactions }) => {
       await wallets.findByIdForUpdate(candidata.walletId);
       const transaction = await transactions.findByIdForUpdate(candidata.id);
-      if (transaction?.status !== WagerTransactionStatus.PendingReference) return;
+      if (transaction?.status !== WagerTransactionStatus.PendingReference) return undefined;
       transaction.fail(FailureCode.InfrastructureFailure, this.clock.now());
       await transactions.updatePending(transaction);
+      return { kind: transaction.kind, status: transaction.status };
     });
   }
 }

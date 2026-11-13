@@ -41,11 +41,13 @@ export interface Env {
   shutdownTimeoutMs: number;
 }
 
-function inteiro(nome: string, valor: string | undefined, padrao: number): number {
+function inteiro(nome: string, valor: string | undefined, padrao: number, minimo = 0): number {
   if (valor === undefined || valor === '') return padrao;
   const numero = Number(valor);
-  if (!Number.isInteger(numero)) {
-    throw new Error(`Variável de ambiente ${nome} deve ser um inteiro, recebido "${valor}"`);
+  if (!Number.isInteger(numero) || numero < minimo) {
+    throw new Error(
+      `Variável de ambiente ${nome} deve ser um inteiro maior ou igual a ${minimo}, recebido "${valor}"`,
+    );
   }
   return numero;
 }
@@ -65,8 +67,8 @@ export function loadEnv(source: Record<string, string | undefined> = process.env
   return {
     port: inteiro('PORT', source.PORT, 3000),
     databaseUrl: source.DATABASE_URL ?? 'postgres://wagering:wagering@localhost:5432/wagering',
-    dbPoolMax: inteiro('DB_POOL_MAX', source.DB_POOL_MAX, 20),
-    dbLockTimeoutMs: inteiro('DB_LOCK_TIMEOUT_MS', source.DB_LOCK_TIMEOUT_MS, 3000),
+    dbPoolMax: inteiro('DB_POOL_MAX', source.DB_POOL_MAX, 20, 1),
+    dbLockTimeoutMs: inteiro('DB_LOCK_TIMEOUT_MS', source.DB_LOCK_TIMEOUT_MS, 3000, 1),
     sqsEndpoint: source.SQS_ENDPOINT ?? 'http://localhost:4566',
     awsRegion: source.AWS_REGION ?? 'us-east-1',
     awsAccessKeyId: source.AWS_ACCESS_KEY_ID ?? 'test',
@@ -94,6 +96,7 @@ export function loadEnv(source: Record<string, string | undefined> = process.env
       'CONSUMER_MAX_RECEIVE_COUNT',
       source.CONSUMER_MAX_RECEIVE_COUNT,
       WAGER_TRANSACTIONS_MAX_RECEIVE_COUNT,
+      1,
     ),
     faultExitBeforeAck: booleano('FAULT_EXIT_BEFORE_ACK', source.FAULT_EXIT_BEFORE_ACK, false),
     eventsQueueName: source.SQS_EVENTS_QUEUE ?? QUEUES.wagerEvents,
@@ -106,12 +109,14 @@ export function loadEnv(source: Record<string, string | undefined> = process.env
       'OUTBOX_PUBLISHER_INTERVAL_MS',
       source.OUTBOX_PUBLISHER_INTERVAL_MS,
       500,
+      10,
     ),
     pendingWorkerEnabled: booleano('PENDING_WORKER_ENABLED', source.PENDING_WORKER_ENABLED, true),
     pendingWorkerIntervalMs: inteiro(
       'PENDING_WORKER_INTERVAL_MS',
       source.PENDING_WORKER_INTERVAL_MS,
       1000,
+      10,
     ),
     shutdownTimeoutMs: inteiro('SHUTDOWN_TIMEOUT_MS', source.SHUTDOWN_TIMEOUT_MS, 8000),
   };

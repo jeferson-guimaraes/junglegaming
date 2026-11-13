@@ -1,4 +1,14 @@
-import { Body, Controller, Get, Headers, Param, Post, Res, UseGuards } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Get,
+  Headers,
+  Inject,
+  Param,
+  Post,
+  Res,
+  UseGuards,
+} from '@nestjs/common';
 import type { Response } from 'express';
 import {
   GetWagerTransaction,
@@ -7,6 +17,7 @@ import {
 import type { MoneyProps } from '@/domain/money';
 import { type WagerTransaction, WagerTransactionStatus } from '@/domain/wager-transaction';
 import { currentCorrelationId, newCorrelationId } from '@/infrastructure/observability/correlation';
+import { APP_LOGGER, type AppLogger } from '@/infrastructure/observability/logger';
 import { texto, uuid } from '../../validation';
 import { parseWagerTransaction } from '../../wager-transaction.input';
 import { AuthGuard } from '../auth.guard';
@@ -70,6 +81,7 @@ export class TransactionsController {
   constructor(
     private readonly processTransaction: ProcessWagerTransaction,
     private readonly getTransaction: GetWagerTransaction,
+    @Inject(APP_LOGGER) private readonly logger: AppLogger,
   ) {}
 
   @Post('wagering/transactions')
@@ -83,6 +95,19 @@ export class TransactionsController {
       correlationId: currentCorrelationId() ?? newCorrelationId(),
       causationId: undefined,
     });
+    // Só identificadores e estado: valores e payload completo não vão para o log.
+    this.logger.info(
+      {
+        transactionId: transaction.id,
+        walletId: transaction.walletId,
+        providerId: transaction.providerId,
+        kind: transaction.kind,
+        status: transaction.status,
+        failureCode: transaction.failureCode,
+        idempotentReplay,
+      },
+      'transação processada',
+    );
     response.status(STATUS_HTTP[transaction.status]);
     return { ...resultado(transaction), idempotentReplay };
   }

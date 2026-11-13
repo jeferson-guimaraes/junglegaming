@@ -181,6 +181,8 @@ describe('Queda e reinício no meio da carga', () => {
     await primeira.stop('SIGKILL');
     const encerramento = await segunda.stop('SIGTERM');
     expect(encerramento.exitCode).toBe(0);
+    // A queda aconteceu de fato no meio da carga: ainda havia trabalho por fazer.
+    expect(await apostasGravadas(wallets)).toBeLessThan(300);
     apps = [apps[2] as AppProcess, await subir()];
 
     await esperar(

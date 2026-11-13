@@ -9,7 +9,7 @@ import { OutboxMessage } from '@/domain/outbox-message';
 import { WagerTransaction } from '@/domain/wager-transaction';
 import { Wallet } from '@/domain/wallet';
 import { WalletNotFoundError } from './errors';
-import { ClockPort, IdGenerator, UnitOfWork } from './ports';
+import { ClockPort, IdGenerator, Metrics, UnitOfWork } from './ports';
 
 export interface OpenWalletInput {
   playerId: string;
@@ -23,6 +23,7 @@ export class OpenWallet {
     private readonly uow: UnitOfWork,
     private readonly clock: ClockPort,
     private readonly ids: IdGenerator,
+    private readonly metrics: Metrics,
   ) {}
 
   /**
@@ -76,6 +77,11 @@ export class OpenWallet {
       for (const evento of eventos) {
         await outbox.insert(OutboxMessage.enqueue(evento));
       }
+    });
+    this.metrics.increment('wager_transactions_total', {
+      kind: opening.kind,
+      status: opening.status,
+      source: 'internal',
     });
     return wallet;
   }

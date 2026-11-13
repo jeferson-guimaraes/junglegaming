@@ -4,6 +4,7 @@ import {
   type OnApplicationBootstrap,
   type OnModuleDestroy,
 } from '@nestjs/common';
+import { Metrics } from '@/application/ports';
 import {
   OUTBOX_BATCH_SIZE,
   PublishOutbox,
@@ -21,6 +22,7 @@ export class OutboxPublisherWorker implements OnApplicationBootstrap, OnModuleDe
 
   constructor(
     private readonly publishOutbox: PublishOutbox,
+    private readonly metrics: Metrics,
     @Inject(APP_LOGGER) private readonly logger: AppLogger,
   ) {
     this.tarefa = new PeriodicTask('outbox-publisher', () => this.ciclo(), logger);
@@ -48,6 +50,7 @@ export class OutboxPublisherWorker implements OnApplicationBootstrap, OnModuleDe
   private async publicar(): Promise<PublishSummary> {
     const resumo = await this.publishOutbox.runOnce();
     if (resumo.reagendados > 0) {
+      this.metrics.increment('wager_retries_total', { component: 'outbox' }, resumo.reagendados);
       this.logger.warn(
         { publicados: resumo.publicados, reagendados: resumo.reagendados },
         'publicação de eventos falhou; nova tentativa agendada',
